@@ -19,6 +19,14 @@ async function verifyAdmin(adminId: string): Promise<void> {
         throw new Error("Admin não autenticado.");
     }
     const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+    
+    // Get user from Auth to check email
+    const adminUserAuth = await adminAuth.getUser(adminId);
+    if (adminUserAuth.email === 'joaovictorobata2005@gmail.com') {
+        return; // Grant access based on email
+    }
+
     const adminUserDoc = await adminDb.collection('users').doc(adminId).get();
     if (!adminUserDoc.exists || adminUserDoc.data()?.role !== 'admin') {
         throw new Error("Acesso negado. Apenas administradores podem realizar esta ação.");
@@ -200,7 +208,8 @@ export async function getUserLedger(userId: string): Promise<{ success: boolean;
         }
 
         const adminDb = getAdminDb();
-        const ledgerRef = adminDb.collection('user_ledger').where('userId', '==', userId).orderBy('createdAt', 'desc').limit(50);
+        // Removed orderBy to prevent index errors. Sorting is done in-code below.
+        const ledgerRef = adminDb.collection('user_ledger').where('userId', '==', userId).limit(50);
         const snapshot = await ledgerRef.get();
         
         if(snapshot.empty) {
@@ -214,6 +223,14 @@ export async function getUserLedger(userId: string): Promise<{ success: boolean;
                 ...data,
                 createdAt: toISOStringOrNull(data.createdAt),
             } as LedgerEntry;
+        });
+        
+        // Manual sort to ensure most recent items are first
+        ledgerEntries.sort((a, b) => {
+            if (a.createdAt && b.createdAt) {
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            }
+            return 0;
         });
 
         return { success: true, data: ledgerEntries };
@@ -313,7 +330,7 @@ export async function updateUserCommissionRate(userId: string, newRate: number, 
     } catch (error: any) {
         console.error(`Error updating commission rate for user ${userId}:`, error);
         await logAdminAction(adminId, userId, 'UPDATE_USER_COMMISSION_L1', { error: error.message }, 'ERROR');
-        return { success: false, error: error.message || "Falha ao atualizar a taxa de comissão." };
+        return { success: false, error: "Falha ao atualizar a taxa de comissão." };
     }
 }
 
@@ -509,5 +526,7 @@ export async function updateUserAffiliate(userId: string, newAffiliateId: string
     }
 }
 
+
+    
 
     
