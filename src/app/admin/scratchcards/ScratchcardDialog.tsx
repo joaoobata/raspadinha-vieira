@@ -86,6 +86,9 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
   const [scratchPreview, setScratchPreview] = useState<string | null>(null);
   
   const [prizeStates, setPrizeStates] = useState<PrizeState[]>([]);
+  
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  const scratchInputRef = useRef<HTMLInputElement>(null);
   const prizeFileInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const form = useForm<ScratchcardFormValues>({
@@ -382,7 +385,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                     <Label>Imagem de Capa</Label>
                     <Input 
                         type="file" 
-                        ref={useRef<HTMLInputElement | null>(null)}
+                        ref={coverInputRef}
                         className="hidden"
                         accept="image/png, image/jpeg, image/gif, image/webp"
                         onChange={(e) => handleFileChange(e, 'cover')}
@@ -399,7 +402,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                             </div>
                         </div>
                     )}
-                    <Button type="button" variant="outline" size="sm" onClick={() => (document.querySelector('input[type="file"][id^="cover-input-"]') as HTMLInputElement)?.click()} id={`cover-input-${uuidv4()}`}>
+                    <Button type="button" variant="outline" size="sm" onClick={() => coverInputRef.current?.click()}>
                         <Upload className="mr-2 h-4 w-4" /> Escolher Imagem
                     </Button>
                     <ShadcnFormDescription>Tamanho recomendado: 400x200 pixels.</ShadcnFormDescription>
@@ -408,7 +411,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                      <Label>Imagem para Raspar (Opcional)</Label>
                     <Input 
                         type="file" 
-                        ref={useRef<HTMLInputElement | null>(null)}
+                        ref={scratchInputRef}
                         className="hidden"
                         accept="image/png, image/jpeg, image/gif, image/webp"
                         onChange={(e) => handleFileChange(e, 'scratch')}
@@ -425,7 +428,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                             </div>
                         </div>
                     )}
-                     <Button type="button" variant="outline" size="sm" onClick={() => (document.querySelector('input[type="file"][id^="scratch-input-"]') as HTMLInputElement)?.click()} id={`scratch-input-${uuidv4()}`}>
+                     <Button type="button" variant="outline" size="sm" onClick={() => scratchInputRef.current?.click()}>
                         <Upload className="mr-2 h-4 w-4" /> Escolher Imagem
                     </Button>
                     <ShadcnFormDescription>Se deixado em branco, será usada uma cor cinza. Tamanho recomendado: 500x500 pixels.</ShadcnFormDescription>
@@ -573,7 +576,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                                 type="file"
                                 className="hidden"
                                 accept="image/png, image/jpeg, image/gif, image/webp"
-                                ref={el => prizeFileInputRefs.current[index] = el}
+                                ref={el => { prizeFileInputRefs.current[index] = el; }}
                                 onChange={(e) => handlePrizeFileChange(e, index)}
                             />
                             <div className="flex items-center gap-4">
@@ -629,3 +632,5 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
     </Dialog>
   );
 }
+
+    
