@@ -96,6 +96,14 @@ export default function AdminLayout({
         router.push('/login');
         return;
       }
+      
+      // Hardcoded admin email
+      if (user.email === 'joaovictorobata2005@gmail.com') {
+          setIsAuthorized(true);
+          setCheckingAuth(false);
+          return;
+      }
+
       try {
         const userDocRef = doc(db, 'users', user.uid);
         const userDocSnap = await getDoc(userDocRef);
