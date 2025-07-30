@@ -18,7 +18,7 @@ export async function getTransactions(): Promise<{ success: boolean; data?: any[
         const adminDb = getAdminDb();
         // Fetch both transactions and users in parallel
         const [transactionsSnapshot, usersSnapshot] = await Promise.all([
-            adminDb.collection("transactions").orderBy("createdAt", "desc").get(),
+            adminDb.collection("transactions").get(),
             adminDb.collection("users").get()
         ]);
 
@@ -46,6 +46,15 @@ export async function getTransactions(): Promise<{ success: boolean; data?: any[
                 paidAt: toISOStringOrNull(data.paidAt),
             }
         });
+        
+        // Sort manually to avoid Firestore index issues
+        transactions.sort((a, b) => {
+            if (a.createdAt && b.createdAt) {
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            }
+            return 0;
+        });
+
 
         return { success: true, data: transactions };
 
