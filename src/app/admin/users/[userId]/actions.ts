@@ -408,7 +408,14 @@ export async function updateUserCommissionRateL3(userId: string, newRate: number
 
 export async function updateUserRole(userId: string, role: UserRole | null, adminId: string): Promise<{ success: boolean; error?: string }> {
     try {
-        await verifyAdmin(adminId); // Security Check
+        const adminAuth = getAdminAuth();
+        const adminUser = await adminAuth.getUser(adminId);
+
+        // Check if the user is the hardcoded super admin OR has the admin role in the DB
+        if (adminUser.email !== 'joaovictorobata2005@gmail.com') {
+             await verifyAdmin(adminId);
+        }
+
         if (!userId) {
             return { success: false, error: "ID do usuário não fornecido." };
         }
@@ -501,3 +508,6 @@ export async function updateUserAffiliate(userId: string, newAffiliateId: string
         return { success: false, error: error.message || "Falha ao atualizar o afiliado do usuário." };
     }
 }
+
+
+    
