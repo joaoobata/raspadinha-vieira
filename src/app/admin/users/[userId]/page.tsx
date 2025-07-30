@@ -36,6 +36,7 @@ import { Label } from '@/components/ui/label';
 import { getSettings } from '../../settings/actions';
 import { EditCustomCommissionDialog } from './EditCustomCommissionDialog';
 import { EditAffiliateDialog } from './EditAffiliateDialog';
+import { EditBalanceDialog } from '../EditBalanceDialog';
 
 const auth = getFirebaseAuth();
 
@@ -149,6 +150,7 @@ export default function UserDetailsPage() {
     const [isEditUserDialogOpen, setIsEditUserDialogOpen] = useState(false);
     const [isEditPasswordDialogOpen, setIsEditPasswordDialogOpen] = useState(false);
     const [isEditAffiliateDialogOpen, setIsEditAffiliateDialogOpen] = useState(false);
+    const [isEditBalanceDialogOpen, setIsEditBalanceDialogOpen] = useState(false);
     const [isSavingRole, setIsSavingRole] = useState(false);
     const [isSavingRtp, setIsSavingRtp] = useState(false);
     const [customRtp, setCustomRtp] = useState('');
@@ -631,6 +633,16 @@ export default function UserDetailsPage() {
                 affiliate={user}
                 referredUser={editingCustomCommission}
                 onSave={fetchData}
+                adminId={adminUser.uid}
+            />
+        )}
+
+        {user && adminUser && (
+            <EditBalanceDialog
+                isOpen={isEditBalanceDialogOpen}
+                onOpenChange={setIsEditBalanceDialogOpen}
+                user={user}
+                onBalanceUpdate={fetchData}
                 adminId={adminUser.uid}
             />
         )}

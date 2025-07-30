@@ -23,6 +23,14 @@ async function verifyAdmin(adminId: string): Promise<void> {
         throw new Error("Admin não autenticado.");
     }
     const adminDb = getAdminDb();
+    const adminAuth = getAdminAuth();
+    
+    // Get user from Auth to check email
+    const adminUserAuth = await adminAuth.getUser(adminId);
+    if (adminUserAuth.email === 'joaovictorobata2005@gmail.com') {
+        return; // Grant access based on email
+    }
+
     const adminUserDoc = await adminDb.collection('users').doc(adminId).get();
     if (!adminUserDoc.exists || adminUserDoc.data()?.role !== 'admin') {
         throw new Error("Acesso negado. Apenas administradores podem realizar esta ação.");
