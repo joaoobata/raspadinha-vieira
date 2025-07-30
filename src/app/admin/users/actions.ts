@@ -58,7 +58,8 @@ export interface SearchedUser {
 export async function getUsers(): Promise<{ success: boolean; data?: UserData[]; error?: string }> {
     try {
         const adminDb = getAdminDb();
-        const allUsersSnapshot = await adminDb.collection('users').orderBy("createdAt", "desc").get();
+        // Removed ordering to prevent errors on documents without the field.
+        const allUsersSnapshot = await adminDb.collection('users').get();
 
         if (allUsersSnapshot.empty) {
             return { success: true, data: [] };
@@ -99,6 +100,11 @@ export async function getUsers(): Promise<{ success: boolean; data?: UserData[];
                 l1ReferralCount: referralCountMap.get(doc.id) || 0,
                 commissionRate: data.commissionRate,
             } as UserData;
+        }).sort((a, b) => {
+            if (a.createdAt && b.createdAt) {
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            }
+            return 0;
         });
 
         return { success: true, data: usersData };
