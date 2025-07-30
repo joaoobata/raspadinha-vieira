@@ -1,0 +1,22 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Usuários podem ler e escrever seus próprios dados
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Qualquer usuário autenticado pode ler as configurações (necessário para o servidor ler as chaves do gateway)
+    match /settings/{docId} {
+        allow read: if request.auth != null;
+    }
+
+    // Todas as outras coleções só podem ser acessadas pelo Admin SDK no servidor
+    // Acesso do cliente é negado por padrão
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
