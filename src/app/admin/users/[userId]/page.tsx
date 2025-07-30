@@ -5,7 +5,7 @@ import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { getFirebaseAuth, getFirestoreDb } from '@/lib/firebase';
+import { auth } from '@/lib/firebase';
 import { 
     ArrowLeft, User, Wallet, Landmark, Banknote, History, Gift, Users as UsersIcon, 
     Percent, Pencil, Shield, Crown, TrendingUp, TrendingDown, Coins, PlusCircle, Gamepad2, Handshake, Lock, Edit, ChevronDown, Search
@@ -136,7 +136,6 @@ export default function UserDetailsPage() {
     const params = useParams();
     const userId = Array.isArray(params.userId) ? params.userId[0] : params.userId;
     const { toast } = useToast();
-    const auth = getFirebaseAuth();
     const [adminUser] = useAuthState(auth);
     const [user, setUser] = useState<UserDetailsData | null>(null);
     const [ledger, setLedger] = useState<LedgerEntry[]>([]);
