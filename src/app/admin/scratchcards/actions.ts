@@ -59,7 +59,8 @@ export const getScratchcards = cache(async (): Promise<{ success: boolean; data?
     try {
         const adminDb = getAdminDb();
         const scratchcardsCollection = adminDb.collection('scratchcards');
-        const snapshot = await scratchcardsCollection.orderBy("createdAt", "desc").get();
+        // Removed orderBy to prevent index errors. Sorting will be done in-code.
+        const snapshot = await scratchcardsCollection.get();
         if (snapshot.empty) {
             return { success: true, data: [] };
         }
@@ -71,6 +72,14 @@ export const getScratchcards = cache(async (): Promise<{ success: boolean; data?
                 createdAt: toISOStringOrNull(docData.createdAt),
                 updatedAt: toISOStringOrNull(docData.updatedAt),
             } as Scratchcard;
+        });
+        
+        // Sort the data by creation date manually
+        data.sort((a, b) => {
+            if (a.createdAt && b.createdAt) {
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            }
+            return 0;
         });
 
         return { success: true, data };
