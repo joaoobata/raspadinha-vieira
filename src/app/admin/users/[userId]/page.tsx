@@ -38,8 +38,6 @@ import { EditCustomCommissionDialog } from './EditCustomCommissionDialog';
 import { EditAffiliateDialog } from './EditAffiliateDialog';
 import { EditBalanceDialog } from '../EditBalanceDialog';
 
-const auth = getFirebaseAuth();
-
 const ReferralTable = ({
   title,
   referrals,
@@ -138,6 +136,7 @@ export default function UserDetailsPage() {
     const params = useParams();
     const userId = Array.isArray(params.userId) ? params.userId[0] : params.userId;
     const { toast } = useToast();
+    const auth = getFirebaseAuth();
     const [adminUser] = useAuthState(auth);
     const [user, setUser] = useState<UserDetailsData | null>(null);
     const [ledger, setLedger] = useState<LedgerEntry[]>([]);
