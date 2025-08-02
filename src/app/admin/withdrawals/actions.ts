@@ -164,7 +164,7 @@ export async function processWithdrawal(
         const transferPayload = {
             identifier: withdrawalData.identifier, 
             amount: withdrawalData.amount,
-            discountFeeOfReceiver: true,
+            discountFeeOfReceiver: false,
             pix: {
                 type: withdrawalData.pixKeyType,
                 key: withdrawalData.pixKey,
