@@ -358,14 +358,18 @@ export async function playGame(
         }
 
         let prizeWon: Prize | null = null;
+        let finalGrid: Prize[] = [];
+
         await adminDb.runTransaction(async (transaction) => {
+            // --- READ PHASE ---
             const batchRef = associatedBatchDoc.ref;
             const batchSnap = await transaction.get(batchRef);
             let batchData = batchSnap.data()! as GgrBatch;
 
+            // --- PROCESSING (in memory) ---
             if (batchData.isRecurring && batchData.ggrCurrent >= batchData.ggrTarget) {
                 const newBatchState = { ggrCurrent: 0, prizesDistributed: 0 };
-                transaction.update(batchRef, newBatchState);
+                // This will be written later
                 batchData = { ...batchData, ...newBatchState };
             }
 
@@ -376,21 +380,29 @@ export async function playGame(
             const availablePrizeBudget = maxPrizeAllowed - (prizesDistributed || 0);
             
             let prizeWonValue = 0;
+            let determinedPrize: Prize | null = null;
             if (availablePrizeBudget > 0) {
                 const determinedTier = determinePrizeTier(batchData, availablePrizeBudget);
                 const prizesInTier = getPrizesForTier(determinedTier, winnablePrizes, prizeTiers);
                 const possiblePrize = selectWeightedPrize(prizesInTier, undefined, availablePrizeBudget);
                 
                 if (possiblePrize) {
-                    prizeWon = possiblePrize;
-                    prizeWonValue = prizeWon.value;
+                    determinedPrize = possiblePrize;
+                    prizeWonValue = determinedPrize.value;
                 }
             }
-            if(!prizeWon) prizeWon = noWinPrize;
-
-            const gamePlayRef = adminDb.collection('game_plays').doc();
-            const lossAmount = card.price - prizeWonValue;
             
+            if(!determinedPrize) {
+                determinedPrize = noWinPrize;
+            }
+            
+            prizeWon = determinedPrize; // Set prizeWon for outer scope
+            finalGrid = generateGameGrid(card.prizes, prizeWon); // Set finalGrid for outer scope
+
+            const lossAmount = card.price - prizeWonValue;
+
+            // --- WRITE PHASE ---
+            const gamePlayRef = adminDb.collection('game_plays').doc();
             await createLedgerEntries(transaction, userId, card.price, prizeWonValue, card.name, gamePlayRef.id);
             
             transaction.set(gamePlayRef, {
@@ -399,20 +411,21 @@ export async function playGame(
                 lossAmount: lossAmount > 0 ? lossAmount : 0, createdAt: FieldValue.serverTimestamp()
             });
 
-            transaction.update(batchRef, {
-                ggrCurrent: newGgrCurrent,
-                prizesDistributed: (prizesDistributed || 0) + prizeWonValue
-            });
+            // If the batch was reset, write the full new state, otherwise just increment.
+            const updateData = (batchData.ggrCurrent === 0 && batchData.prizesDistributed === 0)
+                ? { ggrCurrent: card.price, prizesDistributed: prizeWonValue }
+                : { ggrCurrent: FieldValue.increment(card.price), prizesDistributed: FieldValue.increment(prizeWonValue) };
+
+            transaction.update(batchRef, updateData);
         });
         
-        const grid = generateGameGrid(card.prizes, prizeWon);
         await logSystemEvent(userId, 'user', 'SCRATCHCARD_PLAY', {
             cardId: card.id, cardName: card.name, price: card.price,
             prizeWon: prizeWon?.name || 'Nenhum', prizeValue: prizeWon?.value || 0,
             rtpSource: 'ggr_batch', batchId: associatedBatchDoc.id,
         }, 'SUCCESS');
 
-        return { success: true, data: { grid, prizeWon } };
+        return { success: true, data: { grid: finalGrid, prizeWon } };
     }
 
     // Fallback if no batch is associated
@@ -450,3 +463,5 @@ export async function playGame(
     return { success: false, error: error.message };
   }
 }
+
+    
