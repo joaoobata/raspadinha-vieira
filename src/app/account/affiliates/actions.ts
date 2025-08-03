@@ -14,14 +14,6 @@ interface ReferralDetails {
     commissionRate: number; // The actual rate applied, as a percentage number (e.g., 10 for 10%)
 }
 
-interface RegistrationDetails {
-    id: string;
-    name: string;
-    email: string;
-    phone: string;
-    level: 1 | 2 | 3;
-}
-
 interface CommissionPlan {
     level1Rate: number;
     level2Rate: number;
@@ -46,6 +38,29 @@ interface AffiliateStats {
     },
 }
 
+// Helper to fetch transactions in batches to avoid Firestore's 30-item 'in' query limit
+async function fetchTransactionsInBatches(adminDb: FirebaseFirestore.Firestore, userIds: string[]): Promise<FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[]> {
+    if (userIds.length === 0) {
+        return [];
+    }
+
+    const allTransactions: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[] = [];
+    const batchSize = 30;
+
+    for (let i = 0; i < userIds.length; i += batchSize) {
+        const batchIds = userIds.slice(i, i + batchSize);
+        if (batchIds.length > 0) {
+            const snapshot = await adminDb.collection('transactions')
+                .where('userId', 'in', batchIds)
+                .where('status', '==', 'COMPLETED')
+                .get();
+            allTransactions.push(...snapshot.docs);
+        }
+    }
+    return allTransactions;
+}
+
+
 export async function getAccountStats(userId: string): Promise<{ success: boolean; data?: AffiliateStats; error?: string }> {
     if (!userId) {
         return { success: false, error: "Usuário não autenticado." };
@@ -53,26 +68,23 @@ export async function getAccountStats(userId: string): Promise<{ success: boolea
 
     try {
         const adminDb = getAdminDb();
-        const userDocRef = adminDb.collection('users').doc(userId);
-        const settingsRef = adminDb.collection('settings').doc('general');
         
-        const [userDoc, settingsDoc, allUsersSnapshot, transactionsSnapshot, commissionsSnapshot] = await Promise.all([
-            userDocRef.get(),
-            settingsRef.get(),
-            adminDb.collection('users').get(),
-            adminDb.collection('transactions').where('status', '==', 'COMPLETED').get(),
+        const [userDoc, settingsDoc, allUsersSnapshot, commissionsSnapshot] = await Promise.all([
+            adminDb.collection('users').doc(userId).get(),
+            adminDb.collection('settings').doc('general').get(),
+            adminDb.collection('users').get(), // Needed to build the referral tree
             adminDb.collection('commissions').where('affiliateId', '==', userId).get()
         ]);
 
         if (!userDoc.exists) {
             return { success: false, error: "Usuário não encontrado." };
         }
-        
+
         const userData = userDoc.data()!;
         const settingsData = settingsDoc.data() || {};
 
         const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'https://raspadinha-jade.vercel.app';
-        const referralLink = `${baseUrl}/?ref=${userId}`;
+        const referralLink = `${baseUrl}/c/${userId}`;
         
         const commissionPlan: CommissionPlan = {
             level1Rate: settingsData.commissionRateL1 ?? 0,
@@ -80,31 +92,43 @@ export async function getAccountStats(userId: string): Promise<{ success: boolea
             level3Rate: settingsData.commissionRateL3 ?? 0,
         };
         
+        // Find referrals at each level
+        const level1Docs = allUsersSnapshot.docs.filter(doc => doc.data().referredBy === userId);
+        const level1Ids = level1Docs.map(doc => doc.id);
+        
+        const level2Docs = level1Ids.length > 0 ? allUsersSnapshot.docs.filter(doc => level1Ids.includes(doc.data().referredBy)) : [];
+        const level2Ids = level2Docs.map(doc => doc.id);
+
+        const level3Docs = level2Ids.length > 0 ? allUsersSnapshot.docs.filter(doc => level2Ids.includes(doc.data().referredBy)) : [];
+        const level3Ids = level3Docs.map(doc => doc.id);
+
+        const allReferralIds = [...level1Ids, ...level2Ids, ...level3Ids];
+
         const depositsByUserId: Map<string, number> = new Map();
-        transactionsSnapshot.docs.forEach(doc => {
-            const data = doc.data();
-            depositsByUserId.set(data.userId, (depositsByUserId.get(data.userId) || 0) + data.amount);
-        });
+        if(allReferralIds.length > 0) {
+            // Fetch transactions in batches to avoid query limits
+            const transactionsDocs = await fetchTransactionsInBatches(adminDb, allReferralIds);
+            transactionsDocs.forEach(doc => {
+                const data = doc.data();
+                depositsByUserId.set(data.userId, (depositsByUserId.get(data.userId) || 0) + data.amount);
+            });
+        }
         
         const commissionDataByReferredId = new Map<string, { commissionBaseAmount: number, commissionGenerated: number, commissionRate: number }>();
-
         commissionsSnapshot.docs.forEach(doc => {
             const data = doc.data();
             const existing = commissionDataByReferredId.get(data.referredUserId) || { commissionBaseAmount: 0, commissionGenerated: 0, commissionRate: 0 };
-            existing.commissionBaseAmount += data.depositAmount || 0; // Use depositAmount
+            existing.commissionBaseAmount += data.depositAmount || 0;
             existing.commissionGenerated += data.commissionEarned;
-            // The rate from the commission document is a decimal (e.g., 0.1 for 10%), so we multiply by 100 here.
             existing.commissionRate = (data.commissionRate || 0) * 100;
             commissionDataByReferredId.set(data.referredUserId, existing);
         });
 
         const processReferrals = (referralDocs: FirebaseFirestore.QueryDocumentSnapshot[], level: number): ReferralDetails[] => {
-            const referrals: ReferralDetails[] = [];
-            referralDocs.forEach(doc => {
+            return referralDocs.map(doc => {
                 const referralData = doc.data();
                 const totalDeposited = depositsByUserId.get(doc.id) || 0;
                 const name = `${referralData.firstName} ${referralData.lastName}`.trim() || referralData.email;
-                
                 const commissionInfo = commissionDataByReferredId.get(doc.id);
                 
                 let defaultRate = 0;
@@ -112,30 +136,17 @@ export async function getAccountStats(userId: string): Promise<{ success: boolea
                 if(level === 2) defaultRate = commissionPlan.level2Rate;
                 if(level === 3) defaultRate = commissionPlan.level3Rate;
 
-                referrals.push({
+                return {
                     id: doc.id,
                     name: name,
                     totalDeposited,
                     commissionBaseAmount: commissionInfo?.commissionBaseAmount || 0,
                     commissionGenerated: commissionInfo?.commissionGenerated || 0,
                     commissionRate: commissionInfo?.commissionRate ?? defaultRate,
-                });
-
-            });
-            return referrals.sort((a,b) => b.commissionGenerated - a.commissionGenerated);
+                };
+            }).sort((a,b) => b.commissionGenerated - a.commissionGenerated);
         };
-
-        const level1Docs = allUsersSnapshot.docs.filter(doc => doc.data().referredBy === userId);
-        const level1Referrals = processReferrals(level1Docs, 1);
         
-        const level1Ids = level1Docs.map(doc => doc.id);
-        const level2Docs = level1Ids.length > 0 ? allUsersSnapshot.docs.filter(doc => level1Ids.includes(doc.data().referredBy)) : [];
-        const level2Referrals = processReferrals(level2Docs, 2);
-
-        const level2Ids = level2Docs.map(doc => doc.id);
-        const level3Docs = level2Ids.length > 0 ? allUsersSnapshot.docs.filter(doc => level2Ids.includes(doc.data().referredBy)) : [];
-        const level3Referrals = processReferrals(level3Docs, 3);
-
         return {
             success: true,
             data: {
@@ -144,15 +155,15 @@ export async function getAccountStats(userId: string): Promise<{ success: boolea
                 commissionPlan,
                 level1: {
                     count: level1Docs.length,
-                    referrals: level1Referrals,
+                    referrals: processReferrals(level1Docs, 1),
                 },
                 level2: {
                     count: level2Docs.length,
-                    referrals: level2Referrals,
+                    referrals: processReferrals(level2Docs, 2),
                 },
                 level3: {
                     count: level3Docs.length,
-                    referrals: level3Referrals,
+                    referrals: processReferrals(level3Docs, 3),
                 },
             },
         };
@@ -202,10 +213,10 @@ export async function claimCommissionBalance(userId: string): Promise<{success: 
                 createdAt: FieldValue.serverTimestamp(),
             });
 
-            // Update balances
+            // Update balances - Increment main balance and reset commission balance
             transaction.update(userRef, {
-                balance: newMainBalance,
-                commissionBalance: 0, // Reset commission balance
+                balance: FieldValue.increment(commissionBalance),
+                commissionBalance: 0,
             });
         });
         

@@ -1,5 +1,6 @@
 
 import { getScratchcards, Scratchcard, Prize } from '@/app/admin/scratchcards/actions';
+import { getSettings } from '@/app/admin/settings/actions';
 import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardDescription, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -53,7 +54,15 @@ export default async function PlayPage({ params }: { params: { cardId: string } 
         ? await getImageAsDataUri(card.scratchImageUrl) 
         : null;
 
-    const allPrizes: Prize[] = (await getScratchcards()).data?.flatMap(game => game.prizes.filter(p => p.value > 0)) || [];
+    const [
+      { data: allGames },
+      { data: settingsData }
+    ] = await Promise.all([
+      getScratchcards(),
+      getSettings()
+    ]);
+    
+    const allPrizes: Prize[] = allGames?.flatMap(game => game.prizes.filter(p => p.value > 0)) || [];
     const specialPrizes = card.prizes.filter(p => p.value >= 100).sort((a,b) => b.value - a.value);
     const otherPrizes = card.prizes.filter(p => p.value < 100 && p.value > 0).sort((a,b) => b.value - a.value);
 
@@ -71,7 +80,13 @@ export default async function PlayPage({ params }: { params: { cardId: string } 
                 </div>
 
                 <div className="w-full max-w-sm mx-auto mt-16">
-                    <PlayArea card={card} scratchImageAsDataUri={scratchImageAsDataUri} />
+                    <PlayArea 
+                        card={card} 
+                        scratchImageAsDataUri={scratchImageAsDataUri}
+                        soundWinUrl={settingsData?.soundWinUrl || null}
+                        soundLoseUrl={settingsData?.soundLoseUrl || null}
+                        soundScratchUrl={settingsData?.soundScratchUrl || null}
+                    />
                 </div>
                 
                 <div className="my-8">

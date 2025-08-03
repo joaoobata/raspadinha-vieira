@@ -73,10 +73,10 @@ export async function saveCategory(category: Omit<Category, 'id' | 'createdAt' |
             });
         } else {
             // Create
-            const { id, ...dataToCreate } = category;
             const docRef = categoriesCollection.doc();
             await docRef.set({
-                ...dataToCreate,
+                ...category,
+                id: docRef.id,
                 createdAt: FieldValue.serverTimestamp(),
                 updatedAt: FieldValue.serverTimestamp(),
             });

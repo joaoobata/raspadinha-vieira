@@ -14,6 +14,7 @@ import { auth } from '@/lib/firebase';
 import Confetti from 'react-confetti';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { cn } from '@/lib/utils';
 
 interface GameResult {
   grid: Prize[];
@@ -46,6 +47,13 @@ export function RewardPlayArea() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isScratching, setIsScratching] = useState(false);
   const isRevealedRef = useRef(false);
+  const uiStateRef = useRef<UIState>(uiState);
+  useEffect(() => {
+    uiStateRef.current = uiState;
+  }, [uiState]);
+
+  const [revealedIndexes, setRevealedIndexes] = useState<Set<number>>(new Set());
+  const [winningIndexes, setWinningIndexes] = useState<Set<number>>(new Set());
 
 
   // Fetch initial game data
@@ -136,19 +144,54 @@ export function RewardPlayArea() {
   }, [isScratching]);
 
 
-  const handleAllRevealed = useCallback(() => {
+  const handleAllRevealed = useCallback((currentResult: GameResult) => {
     if (isRevealedRef.current) return;
     isRevealedRef.current = true;
-    setUiState('finished');
+    
+    // Animate the reveal
+    const allIndexes = [0, 1, 2, 3, 4, 5, 6, 7, 8];
+    const shuffledIndexes = allIndexes.sort(() => Math.random() - 0.5);
+
+    const revealOneByOne = async () => {
+      for (const index of shuffledIndexes) {
+          await new Promise(resolve => setTimeout(resolve, 100)); // Stagger reveal
+          if (uiStateRef.current !== 'playing') break;
+          setRevealedIndexes(prev => new Set(prev).add(index));
+      }
+      
+      if (uiStateRef.current !== 'playing') return;
+      
+      // Highlight winning combination
+      const prizeCounts = new Map<string, number[]>();
+      currentResult.grid.forEach((prize, index) => {
+          if (!prizeCounts.has(prize.id)) prizeCounts.set(prize.id, []);
+          prizeCounts.get(prize.id)!.push(index);
+      });
+      for (const [_, indexes] of prizeCounts.entries()) {
+          if (indexes.length >= 3) {
+              setWinningIndexes(new Set(indexes));
+              break;
+          }
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 500)); // Final pause
+      
+      if (uiStateRef.current === 'playing') {
+        setUiState('finished');
+      }
+    };
+
+    revealOneByOne();
+
   }, []);
 
-  const handleRevealAll = () => {
-    if (uiState !== 'playing') return;
+  const handleRevealAllClick = () => {
+    if (uiState !== 'playing' || !gameResult) return;
     const ctx = getCanvasContext();
     const canvas = canvasRef.current;
     if (ctx && canvas) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      handleAllRevealed();
+      handleAllRevealed(gameResult);
     }
   };
 
@@ -157,6 +200,10 @@ export function RewardPlayArea() {
     
     try {
         setUiState('loading');
+        setRevealedIndexes(new Set());
+        setWinningIndexes(new Set());
+        isRevealedRef.current = false;
+        
         const idToken = await user.getIdToken();
         const result = await playRewardGame(idToken);
         if (result.success && result.data) {
@@ -194,7 +241,7 @@ export function RewardPlayArea() {
   const checkRevealPercentage = useCallback(() => {
     const ctx = getCanvasContext();
     const canvas = canvasRef.current;
-    if (!ctx || !canvas || isRevealedRef.current) return;
+    if (!ctx || !canvas || isRevealedRef.current || !gameResult) return;
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const pixels = imageData.data;
     let transparentPixels = 0;
@@ -202,9 +249,9 @@ export function RewardPlayArea() {
       if (pixels[i] === 0) transparentPixels++;
     }
     if ((transparentPixels / (pixels.length / 4)) * 100 > 70) {
-      handleAllRevealed();
+      handleAllRevealed(gameResult);
     }
-  }, [getCanvasContext, handleAllRevealed]);
+  }, [getCanvasContext, handleAllRevealed, gameResult]);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (uiState !== 'playing') return;
@@ -313,8 +360,12 @@ export function RewardPlayArea() {
             <div className="absolute inset-0 z-0">
               <div className="grid grid-cols-3 w-full h-full">
                 {gameResult.grid.map((prize, index) => (
-                  <div key={index} className="bg-zinc-700 w-full h-full flex items-center justify-center border border-zinc-900">
-                    {prize && <Image src={prize.imageUrl} alt={prize.name} width={80} height={80} className="object-contain" />}
+                    <div key={index} className={cn(
+                        "bg-zinc-700 w-full h-full flex items-center justify-center border border-zinc-900 transition-opacity duration-300",
+                        revealedIndexes.has(index) ? 'opacity-100' : 'opacity-0',
+                        winningIndexes.has(index) && "animate-pulse bg-green-900/50 border-2 border-green-500"
+                    )}>
+                        {prize && <Image src={prize.imageUrl} alt={prize.name} width={80} height={80} className="object-contain" />}
                   </div>
                 ))}
               </div>
@@ -349,7 +400,7 @@ export function RewardPlayArea() {
                  <Button onClick={handleScratchAction} className="w-full h-14 bg-primary text-lg">Começar a Raspar</Button>
             )}
             {uiState === 'playing' && (
-                <Button onClick={handleRevealAll} className="w-full" variant="secondary">Revelar Tudo</Button>
+                <Button onClick={handleRevealAllClick} className="w-full" variant="secondary">Revelar Tudo</Button>
             )}
         </div>
       </>

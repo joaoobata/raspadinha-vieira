@@ -13,10 +13,30 @@ const toISOStringOrNull = (timestamp: Timestamp | undefined): string | null => {
     }
 }
 
+// Helper function to recursively convert any Timestamps inside an object
+const convertTimestamps = (obj: any): any => {
+    if (obj instanceof Timestamp) {
+        return obj.toDate().toISOString();
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(convertTimestamps);
+    }
+    if (obj !== null && typeof obj === 'object') {
+        const newObj: { [key: string]: any } = {};
+        for (const key in obj) {
+            if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                newObj[key] = convertTimestamps(obj[key]);
+            }
+        }
+        return newObj;
+    }
+    return obj;
+};
+
 export interface SystemLog {
     id: string;
     timestamp: string | null;
-    actorId: string;
+    actorId: string | null; // Corrected to allow null
     actorType: 'user' | 'system' | 'unauthenticated';
     action: string;
     details: object;
@@ -36,10 +56,16 @@ export async function getSystemLogs(): Promise<{ success: boolean; data?: System
 
         const logs = snapshot.docs.map(doc => {
             const data = doc.data();
+            // Manually construct the object to ensure no complex types are spread.
+            // Convert any nested Timestamps in the 'details' object.
             return {
                 id: doc.id,
-                ...data,
                 timestamp: toISOStringOrNull(data.timestamp),
+                actorId: data.actorId || null,
+                actorType: data.actorType,
+                action: data.action,
+                details: convertTimestamps(data.details),
+                status: data.status,
             } as SystemLog;
         });
 

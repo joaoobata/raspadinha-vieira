@@ -64,6 +64,15 @@ function CancelDepositDialog({ open, onOpenChange, onConfirm }: { open: boolean,
     )
 }
 
+// Function to read a cookie
+const getCookie = (name: string): string | null => {
+    if (typeof document === 'undefined') return null;
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop()?.split(';').shift() || null;
+    return null;
+};
+
 const quickDepositOptions = [
     { amount: 20, label: '+Querido', highlight: true },
     { amount: 40, label: '+Recomendado' },
@@ -132,6 +141,7 @@ export function DepositDialog({ isOpen, onOpenChange }: DepositDialogProps) {
     const transactionRef = doc(db, "transactions", pixData.identifier);
     const unsubscribe = onSnapshot(transactionRef, (doc) => {
       if (doc.exists() && doc.data().status === 'COMPLETED') {
+        // The dataLayer push is now handled server-side to differentiate FTD/Redeposit
         setPaymentConfirmed(true);
       }
     }, (error) => {
@@ -139,7 +149,7 @@ export function DepositDialog({ isOpen, onOpenChange }: DepositDialogProps) {
     });
 
     return () => unsubscribe();
-}, [pixData?.identifier]);
+}, [pixData?.identifier, user]);
 
 
   const handleDeposit = async () => {

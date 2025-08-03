@@ -2,7 +2,6 @@
 'use client';
 
 import {
-  Bell,
   Home,
   Users,
   Settings,
@@ -13,18 +12,18 @@ import {
   DollarSign,
   Landmark,
   LogOut,
-  HelpCircle,
-  ExternalLink,
-  AlertTriangle,
-  HeartPulse,
   Target,
   Handshake,
   Shield,
   Bug,
-  Palette,
   FileText,
   Award,
   Users2,
+  AlertTriangle,
+  Wrench,
+  Megaphone,
+  Box,
+  HeartPulse, // Ícone para Saúde do Sistema
 } from 'lucide-react';
 import Link from 'next/link';
 import Image from 'next/image';
@@ -36,13 +35,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { getSettings } from '../admin/settings/actions';
 import { doc, getDoc } from 'firebase/firestore';
 
-const navSections = [
+const adminNavSections = [
     {
         title: 'Gestão Principal',
         items: [
             { href: '/admin', label: 'Início', icon: Home },
             { href: '/admin/users', label: 'Usuários', icon: Users },
             { href: '/admin/affiliates', label: 'Afiliados', icon: Users2 },
+            { href: '/admin/influencers', label: 'Influenciadores', icon: Megaphone },
             { href: '/admin/scratchcards', label: 'Raspadinhas', icon: Gift },
             { href: '/admin/categories', label: 'Categorias', icon: Tags },
             { href: '/admin/banners', label: 'Banners', icon: ImageIcon },
@@ -54,6 +54,7 @@ const navSections = [
             { href: '/admin/deposits', label: 'Depósitos', icon: DollarSign },
             { href: '/admin/withdrawals', label: 'Saques', icon: Banknote },
             { href: '/admin/commissions', label: 'Comissões', icon: Handshake },
+            { href: '/admin/ggr-batches', label: 'Loteria (GGR)', icon: Box },
         ]
     },
     {
@@ -68,14 +69,16 @@ const navSections = [
     {
         title: 'Logs e Saúde',
         items: [
-            { href: '/admin/scratchcard-health', label: 'Saúde da Raspadinha', icon: HeartPulse },
             { href: '/admin/commission-logs', label: 'Logs de Comissão', icon: Bug },
             { href: '/admin/system-logs', label: 'Logs do Sistema', icon: FileText },
             { href: '/admin/action-logs', label: 'Logs de Admin', icon: Shield },
             { href: '/admin/logs', label: 'Logs de Erros', icon: AlertTriangle },
+            { href: '/admin/system-health', label: 'Saúde do Sistema', icon: HeartPulse }, // Novo item de menu
+            { href: '/admin/fix-admin', label: 'Corrigir Dados', icon: Wrench }, 
         ]
     }
 ];
+
 
 export default function AdminLayout({
   children,
@@ -88,7 +91,7 @@ export default function AdminLayout({
   const [logoUrl, setLogoUrl] = useState('');
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
-
+  
   useEffect(() => {
     const checkAdminStatus = async () => {
       if (loading) return;
@@ -96,19 +99,17 @@ export default function AdminLayout({
         router.push('/login');
         return;
       }
-      
-      // Hardcoded admin email
-      if (user.email === 'joaovictorobata2005@gmail.com') {
-          setIsAuthorized(true);
-          setCheckingAuth(false);
-          return;
-      }
-
       try {
         const userDocRef = doc(db, 'users', user.uid);
         const userDocSnap = await getDoc(userDocRef);
-        if (userDocSnap.exists() && userDocSnap.data()?.role === 'admin') {
-          setIsAuthorized(true);
+        if (userDocSnap.exists()) {
+          const userData = userDocSnap.data();
+          const roles = userData?.roles || [];
+          if (roles.includes('admin')) {
+            setIsAuthorized(true);
+          } else {
+            router.push('/');
+          }
         } else {
           router.push('/');
         }
@@ -121,6 +122,7 @@ export default function AdminLayout({
     };
 
     checkAdminStatus();
+
   }, [user, loading, router]);
 
 
@@ -161,7 +163,7 @@ export default function AdminLayout({
             </Link>
           </div>
           <nav className="space-y-4">
-             {navSections.map(section => (
+             {adminNavSections.map(section => (
                 <div key={section.title}>
                     <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider px-4 mb-2">{section.title}</h3>
                      {section.items.map((item) => (

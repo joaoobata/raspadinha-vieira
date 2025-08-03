@@ -4,7 +4,9 @@
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin-init';
 import { FieldValue } from 'firebase-admin/firestore';
 import { Scratchcard, Prize } from '@/app/admin/scratchcards/actions';
+import { GgrBatch } from '@/app/admin/ggr-batches/actions';
 import { logSystemEvent } from '@/lib/logging';
+import { DemoPrizeProfile } from '@/app/admin/influencers/actions';
 
 async function createLedgerEntries(
     transaction: FirebaseFirestore.Transaction,
@@ -96,41 +98,26 @@ function shuffleArray<T>(array: T[]): T[] {
   return array;
 }
 
-// Determines the prize based on the probability of winning
-function determineOutcome(
-    winnablePrizes: Prize[], 
-    noWinPrize: Prize, 
-    winProbability: number,
-    isInfluencerWin: boolean = false
-): Prize | null {
-    const random = Math.random();
 
-    if (random < winProbability) {
-        // It's a win, now select which prize
-        if (isInfluencerWin) {
-            return selectWeightedPrizeForInfluencer(winnablePrizes);
-        }
-        return selectWeightedPrize(winnablePrizes);
-    } else {
-        // It's a loss
-        return noWinPrize;
-    }
-}
+// REFINED: This function now uses a less aggressive curve, giving higher value prizes a better chance.
+function selectWeightedPrize(prizes: Prize[], weights?: Record<string, number>, budget?: number): Prize | null {
+    if (prizes.length === 0) return null;
 
-// Selects a prize for an influencer, with a balanced approach.
-// Uses a logarithmic scale to give higher value prizes a slight edge without making them overwhelmingly common.
-function selectWeightedPrizeForInfluencer(prizes: Prize[]): Prize | null {
-    if (prizes.length === 0) {
-        return null;
-    }
+    let eligiblePrizes = budget !== undefined ? prizes.filter(p => p.value <= budget) : prizes;
+    if (eligiblePrizes.length === 0) return null;
     
-    const weightedPrizes = prizes.map(p => ({
-        prize: p,
-        // The weight is logarithmic, so the increase in chance slows down for very high value prizes.
-        // This ensures small and medium prizes are still very possible.
-        // The +1 prevents log(0), and +0.1 ensures even a 1-value prize has some weight.
-        weight: Math.log(p.value + 1) + 0.1
-    }));
+    eligiblePrizes = eligiblePrizes.sort((a,b) => b.value - a.value);
+
+    const weightedPrizes = eligiblePrizes.map(p => {
+        // NEW: Weight is now based on the inverse of the square root of the value.
+        // This flattens the probability curve, so higher value prizes aren't penalized as much.
+        const baseWeight = 1 / (Math.sqrt(p.value) + 1);
+        const profileMultiplier = weights && weights[p.id] ? weights[p.id] : 1;
+        return {
+            prize: p,
+            weight: baseWeight * profileMultiplier,
+        };
+    });
 
     const totalWeight = weightedPrizes.reduce((sum, p) => sum + p.weight, 0);
     let random = Math.random() * totalWeight;
@@ -142,33 +129,7 @@ function selectWeightedPrizeForInfluencer(prizes: Prize[]): Prize | null {
         }
     }
 
-    return prizes[prizes.length - 1]; // Fallback
-}
-
-
-// Function to select a prize based on standard weighted probability (lower values are more common)
-function selectWeightedPrize(prizes: Prize[]): Prize | null {
-    if (prizes.length === 0) {
-        return null;
-    }
-
-    // Inverse weight: higher value means lower probability
-    const weightedPrizes = prizes.map(p => ({
-        prize: p,
-        weight: 1 / (p.value + 0.1) 
-    }));
-
-    const totalWeight = weightedPrizes.reduce((sum, p) => sum + p.weight, 0);
-    let random = Math.random() * totalWeight;
-
-    for (const weightedPrize of weightedPrizes) {
-        random -= weightedPrize.weight;
-        if (random <= 0) {
-            return weightedPrize.prize;
-        }
-    }
-
-    return prizes[prizes.length - 1]; // Fallback
+    return eligiblePrizes[eligiblePrizes.length - 1]?.prize || null;
 }
 
 
@@ -228,6 +189,83 @@ function generateGameGrid(allPrizes: Prize[], prizeWon: Prize | null): Prize[] {
 }
 
 
+// --- NEW TIERED PRIZE LOGIC ---
+
+type PrizeTier = 'low' | 'medium' | 'high';
+
+function determinePrizeTier(batch: GgrBatch, budget: number): PrizeTier | null {
+    if (!batch.prizeTiers) return null; // Fallback if tiers are not configured
+
+    const tiers: { name: PrizeTier, config: any, minPrize: number }[] = [
+        { name: 'low', config: batch.prizeTiers.low, minPrize: 0.01 },
+        { name: 'medium', config: batch.prizeTiers.medium, minPrize: batch.prizeTiers.low.maxAmount + 0.01 },
+        { name: 'high', config: batch.prizeTiers.high, minPrize: batch.prizeTiers.medium.maxAmount + 0.01 },
+    ];
+    
+    // Filter out tiers that are impossible to award with the current budget
+    const possibleTiers = tiers.filter(t => budget >= t.minPrize);
+    if (possibleTiers.length === 0) return null;
+    
+    // Create a weighted list of possible tiers based on their probability
+    const weightedTierList: PrizeTier[] = [];
+    possibleTiers.forEach(tier => {
+        // The probability is a whole number (e.g., 75 for 75%). We use it to populate the list.
+        for (let i = 0; i < (tier.config.probability || 0); i++) {
+            weightedTierList.push(tier.name);
+        }
+    });
+
+    if (weightedTierList.length === 0) {
+        return null;
+    }
+    
+    // Select a random tier from the weighted list
+    const randomIndex = Math.floor(Math.random() * weightedTierList.length);
+    return weightedTierList[randomIndex];
+}
+
+
+function getPrizesForTier(tier: PrizeTier | null, allPrizes: Prize[], tiersConfig?: GgrBatch['prizeTiers']): Prize[] {
+    if (!tier || !tiersConfig) {
+        return allPrizes; // Fallback to all prizes if no tier or config
+    }
+    switch (tier) {
+        case 'low':
+            return allPrizes.filter(p => p.value > 0 && p.value <= tiersConfig.low.maxAmount);
+        case 'medium':
+            return allPrizes.filter(p => p.value > tiersConfig.low.maxAmount && p.value <= tiersConfig.medium.maxAmount);
+        case 'high':
+             return allPrizes.filter(p => p.value > tiersConfig.medium.maxAmount);
+        default:
+            return allPrizes;
+    }
+}
+
+// REFINED: Influencer prize weights are now more aggressive and distinct between profiles.
+function getDemoPrizeWeights(profile: DemoPrizeProfile, prizes: Prize[]): Record<string, number> {
+    const weights: Record<string, number> = {};
+    const multipliers = {
+        low:    { low: 3, medium: 1, high: 0.2 }, // Conservative: favors low prizes, medium is possible, high is rare.
+        medium: { low: 1, medium: 3, high: 2 },   // Balanced: makes medium and high prizes more common.
+        high:   { low: 0.1, medium: 5, high: 25 },  // Aggressive: drastically increases chance of high prizes.
+    };
+    const selectedMultipliers = multipliers[profile] || multipliers.medium;
+
+    prizes.forEach(prize => {
+        if (prize.value > 50) {
+            weights[prize.id] = selectedMultipliers.high;
+        } else if (prize.value > 10) {
+            weights[prize.id] = selectedMultipliers.medium;
+        } else if (prize.value > 0) {
+            weights[prize.id] = selectedMultipliers.low;
+        } else {
+            weights[prize.id] = 1; // No multiplier for zero-value prize
+        }
+    });
+    return weights;
+}
+
+
 export async function playGame(
   card: Scratchcard,
   idToken: string | null
@@ -238,6 +276,7 @@ export async function playGame(
     return { success: false, error: 'Usuário não autenticado. Faça login para jogar.' };
   }
   const userId = user.uid;
+  const isInfluencer = user.roles?.includes('influencer');
 
   const winnablePrizes = card.prizes.filter(p => p.value > 0);
   const noWinPrize = card.prizes.find(p => p.value === 0);
@@ -246,82 +285,161 @@ export async function playGame(
       return { success: false, error: 'Esta raspadinha não está configurada corretamente. Faltam prêmios de vitória ou de derrota.' };
   }
 
+  const adminDb = getAdminDb();
+  
   try {
-    const adminDb = getAdminDb();
-    const userRef = adminDb.collection('users').doc(userId);
-    
-    const userDoc = await userRef.get();
-
-    if (!userDoc.exists) {
-      throw new Error('Usuário não encontrado.');
-    }
+    const userDoc = await adminDb.collection('users').doc(userId).get();
+    if (!userDoc.exists) throw new Error('Usuário não encontrado.');
     
     const userData = userDoc.data()!;
-    const currentBalance = userData.balance || 0;
-    if (currentBalance < card.price) {
+
+    // For non-influencers, check balance before playing.
+    if (!isInfluencer && userData.balance < card.price) {
       throw new Error('Saldo insuficiente para jogar.');
     }
 
-    let rtpRate: number;
-    let rtpSource: 'card' | 'influencer' | 'global';
-    let isInfluencerWin = false;
-
-    // RTP Priority: Influencer > Card > Global
-    if (userData.role === 'influencer' && typeof userData.rtpRate === 'number') {
-        rtpRate = userData.rtpRate;
-        rtpSource = 'influencer';
-        isInfluencerWin = true;
-    } else if (typeof card.rtpRate === 'number') {
-        rtpRate = card.rtpRate;
-        rtpSource = 'card';
-    } else {
-        const rtpSettingsRef = adminDb.collection('settings').doc('rtp');
-        const rtpDoc = await rtpSettingsRef.get();
-        const rtpSettings = rtpDoc.exists ? rtpDoc.data() : { rate: 0 };
-        rtpRate = rtpSettings?.rate ?? 0;
-        rtpSource = 'global';
-    }
+    const allBatchesSnapshot = await adminDb.collection('ggr_batches').get();
+    const associatedBatchDoc = allBatchesSnapshot.docs.find(doc => doc.data().participatingCardIds?.includes(card.id));
     
-    // Convert percentage to decimal for probability calculation
-    const rtpRateDecimal = rtpRate / 100;
-    const prizeWon = determineOutcome(winnablePrizes, noWinPrize, rtpRateDecimal, isInfluencerWin);
+    // --- Influencer Logic ---
+    if (isInfluencer) {
+        const demoProfile = userData.demoPrizeProfile || 'medium';
+        const prizeWeights = getDemoPrizeWeights(demoProfile, card.prizes); // Pass all prizes including no-win
+        const prizeWon = selectWeightedPrize(card.prizes, prizeWeights) || noWinPrize;
+        const grid = generateGameGrid(card.prizes, prizeWon);
+
+        // Influencer plays DO affect their balance, but not GGR.
+        await adminDb.runTransaction(async (transaction) => {
+             const gamePlayRef = adminDb.collection('game_plays').doc();
+             await createLedgerEntries(transaction, userId, card.price, prizeWon?.value || 0, card.name, gamePlayRef.id);
+             
+             transaction.set(gamePlayRef, {
+                 userId, cardId: card.id, cardName: card.name, price: card.price,
+                 prizeWonId: prizeWon?.id || null, prizeWonValue: prizeWon?.value || 0,
+                 lossAmount: 0, 
+                 createdAt: FieldValue.serverTimestamp(),
+                 isDemo: true,
+             });
+        });
+
+        await logSystemEvent(userId, 'user', 'SCRATCHCARD_PLAY', {
+            cardId: card.id, cardName: card.name, price: card.price,
+            prizeWon: prizeWon?.name || 'Nenhum', prizeValue: prizeWon?.value || 0,
+            rtpSource: 'influencer_profile', demoProfile: demoProfile, isDemo: true,
+        }, 'SUCCESS');
+        
+        return { success: true, data: { grid, prizeWon } };
+    }
+
+    // --- Regular Player GGR Logic ---
+    if (associatedBatchDoc) {
+        if (associatedBatchDoc.data().status !== 'active') {
+            const prizeWon = noWinPrize;
+            const grid = generateGameGrid(card.prizes, prizeWon);
+
+            await adminDb.runTransaction(async (transaction) => {
+                const gamePlayRef = adminDb.collection('game_plays').doc();
+                await createLedgerEntries(transaction, userId, card.price, 0, card.name, gamePlayRef.id);
+                
+                transaction.set(gamePlayRef, {
+                    userId, cardId: card.id, cardName: card.name, price: card.price,
+                    prizeWonId: prizeWon?.id || null, prizeWonValue: 0,
+                    lossAmount: card.price, createdAt: FieldValue.serverTimestamp()
+                });
+            });
+
+            await logSystemEvent(userId, 'user', 'SCRATCHCARD_PLAY', {
+                cardId: card.id, cardName: card.name, price: card.price,
+                prizeWon: 'Nenhum', prizeValue: 0,
+                rtpSource: 'inactive_ggr_batch', batchId: associatedBatchDoc.id,
+            }, 'SUCCESS');
+
+            return { success: true, data: { grid, prizeWon } };
+        }
+
+        let prizeWon: Prize | null = null;
+        await adminDb.runTransaction(async (transaction) => {
+            const batchRef = associatedBatchDoc.ref;
+            const batchSnap = await transaction.get(batchRef);
+            let batchData = batchSnap.data()! as GgrBatch;
+
+            if (batchData.isRecurring && batchData.ggrCurrent >= batchData.ggrTarget) {
+                const newBatchState = { ggrCurrent: 0, prizesDistributed: 0 };
+                transaction.update(batchRef, newBatchState);
+                batchData = { ...batchData, ...newBatchState };
+            }
+
+            const { ggrTarget, prizePool, ggrCurrent, prizesDistributed, prizeTiers } = batchData;
+            
+            const newGgrCurrent = (ggrCurrent || 0) + card.price;
+            const maxPrizeAllowed = (newGgrCurrent / ggrTarget) * prizePool;
+            const availablePrizeBudget = maxPrizeAllowed - (prizesDistributed || 0);
+            
+            let prizeWonValue = 0;
+            if (availablePrizeBudget > 0) {
+                const determinedTier = determinePrizeTier(batchData, availablePrizeBudget);
+                const prizesInTier = getPrizesForTier(determinedTier, winnablePrizes, prizeTiers);
+                const possiblePrize = selectWeightedPrize(prizesInTier, undefined, availablePrizeBudget);
+                
+                if (possiblePrize) {
+                    prizeWon = possiblePrize;
+                    prizeWonValue = prizeWon.value;
+                }
+            }
+            if(!prizeWon) prizeWon = noWinPrize;
+
+            const gamePlayRef = adminDb.collection('game_plays').doc();
+            const lossAmount = card.price - prizeWonValue;
+            
+            await createLedgerEntries(transaction, userId, card.price, prizeWonValue, card.name, gamePlayRef.id);
+            
+            transaction.set(gamePlayRef, {
+                userId, cardId: card.id, cardName: card.name, price: card.price,
+                prizeWonId: prizeWon?.id || null, prizeWonValue: prizeWonValue,
+                lossAmount: lossAmount > 0 ? lossAmount : 0, createdAt: FieldValue.serverTimestamp()
+            });
+
+            transaction.update(batchRef, {
+                ggrCurrent: newGgrCurrent,
+                prizesDistributed: (prizesDistributed || 0) + prizeWonValue
+            });
+        });
+        
+        const grid = generateGameGrid(card.prizes, prizeWon);
+        await logSystemEvent(userId, 'user', 'SCRATCHCARD_PLAY', {
+            cardId: card.id, cardName: card.name, price: card.price,
+            prizeWon: prizeWon?.name || 'Nenhum', prizeValue: prizeWon?.value || 0,
+            rtpSource: 'ggr_batch', batchId: associatedBatchDoc.id,
+        }, 'SUCCESS');
+
+        return { success: true, data: { grid, prizeWon } };
+    }
+
+    // Fallback if no batch is associated
+    const prizeWon = noWinPrize;
     const grid = generateGameGrid(card.prizes, prizeWon);
     
     await adminDb.runTransaction(async (transaction) => {
         const gamePlayRef = adminDb.collection('game_plays').doc();
-        const prizeValue = prizeWon?.value || 0;
-        const lossAmount = card.price - prizeValue;
+        const prizeValue = 0;
+        const lossAmount = card.price;
 
         await createLedgerEntries(transaction, userId, card.price, prizeValue, card.name, gamePlayRef.id);
-
+        
         transaction.set(gamePlayRef, {
-            userId,
-            cardId: card.id,
-            cardName: card.name,
-            price: card.price,
-            prizeWonId: prizeWon?.id || null,
-            prizeWonValue: prizeValue,
-            lossAmount: lossAmount > 0 ? lossAmount : 0,
-            createdAt: FieldValue.serverTimestamp()
+            userId, cardId: card.id, cardName: card.name, price: card.price,
+            prizeWonId: prizeWon?.id || null, prizeWonValue: prizeValue,
+            lossAmount: lossAmount > 0 ? lossAmount : 0, createdAt: FieldValue.serverTimestamp()
         });
     });
 
-    // Log the game play event
     await logSystemEvent(userId, 'user', 'SCRATCHCARD_PLAY', {
-      cardId: card.id,
-      cardName: card.name,
-      price: card.price,
-      prizeWon: prizeWon?.name || 'Nenhum',
-      prizeValue: prizeWon?.value || 0,
-      rtpSource: rtpSource,
-      rtpRateApplied: `${rtpRate}%`,
+        cardId: card.id, cardName: card.name, price: card.price,
+        prizeWon: 'Nenhum', prizeValue: 0,
+        rtpSource: 'fallback_no_batch',
     }, 'SUCCESS');
 
-
-    return {
-      success: true,
-      data: { grid, prizeWon },
-    };
+    return { success: true, data: { grid, prizeWon } };
 
   } catch (error: any) {
     console.error('Error during playGame:', error);

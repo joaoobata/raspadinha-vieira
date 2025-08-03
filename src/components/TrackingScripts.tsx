@@ -11,26 +11,25 @@ export function TrackingScripts() {
     const searchParams = useSearchParams();
     const [metaPixelId, setMetaPixelId] = useState<string | undefined>();
     const [googleAdsId, setGoogleAdsId] = useState<string | undefined>();
+    const [tiktokPixelId, setTiktokPixelId] = useState<string | undefined>();
 
     useEffect(() => {
-        // Function to initialize settings, now inside useEffect
         async function loadTrackingSettings() {
             const { success, data } = await getTrackingSettings();
             if (success && data) {
                 setMetaPixelId(data.metaPixelId);
                 setGoogleAdsId(data.googleAdsId);
+                setTiktokPixelId(data.tiktokPixelId);
             }
         }
 
         loadTrackingSettings();
-    }, []); // Empty dependency array ensures this runs only once on mount
+    }, []);
 
     useEffect(() => {
-        // Track page views for Meta Pixel
         if (metaPixelId && typeof window.fbq === 'function') {
             window.fbq('track', 'PageView');
         }
-        // Track page views for Google Ads (gtag)
         if (googleAdsId && typeof window.gtag === 'function') {
             const url = pathname + searchParams.toString();
              window.gtag('event', 'page_view', {
@@ -78,14 +77,30 @@ export function TrackingScripts() {
                     </Script>
                 </>
             )}
+            
+            {/* TikTok Pixel Script */}
+            {tiktokPixelId && (
+                 <Script id="tiktok-pixel" strategy="afterInteractive">
+                    {`
+                        !function (w, d, t) {
+                          w.TiktokAnalyticsObject=t;var ttq=w[t]=w[t]||[];ttq.methods=["page","track","identify","instances","debug","on","off","once","ready","alias","group","enableCookie","disableCookie"],ttq.setAndDefer=function(t,e){t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}};for(var i=0;i<ttq.methods.length;i++)ttq.setAndDefer(ttq,ttq.methods[i]);ttq.instance=function(t){for(var e=ttq._i[t]||[],n=0;n<ttq.methods.length;n++)ttq.setAndDefer(e,ttq.methods[n]);return e},ttq.load=function(e,n){var i="https://analytics.tiktok.com/i18n/pixel/events.js";ttq._i=ttq._i||{},ttq._i[e]=[],ttq._i[e].TikTokAnalyticsObject=t,n=n||{};var o=d.createElement("script");o.type="text/javascript",o.async=!0,o.src=i+"?sdkid="+e+"&lib="+t;var a=d.getElementsByTagName("script")[0];a.parentNode.insertBefore(o,a)};
+                        
+                          ttq.load('${tiktokPixelId}');
+                          ttq.page();
+                        }(window, document, 'ttq');
+                    `}
+                </Script>
+            )}
         </>
     );
 }
 
-// Type definition for the Meta Pixel function
+// Type definition for the tracking functions
 declare global {
   interface Window {
     fbq: (...args: any[]) => void;
     gtag: (...args: any[]) => void;
+    ttq: any; // TikTok
+    dataLayer: any[];
   }
 }

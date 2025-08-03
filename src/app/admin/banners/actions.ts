@@ -18,11 +18,7 @@ export interface BannersData {
 }
 
 async function uploadImageAndGetURL(fileBuffer: Buffer, fileName: string, mimeType: string): Promise<string> {
-    const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
-    if (!bucketName) {
-        throw new Error("Firebase Storage bucket name is not configured in environment variables.");
-    }
-    const bucket = getAdminStorage().bucket(bucketName);
+    const bucket = getAdminStorage().bucket(); // Use the default bucket configured in firebase-admin-init
     const file = bucket.file(`banners/${fileName}`);
 
     await file.save(fileBuffer, {

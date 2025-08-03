@@ -171,6 +171,18 @@ Crie os seguintes índices **exatamente** como descrito abaixo. Preste atenção
     1.  `status` (Ascendente)
     2.  `completedAt` (Ascendente)
 
+**Índice 14 (NOVO): Cliques de Afiliados por Data**
+-   **Coleção:** `affiliate_clicks`
+-   **Campos:**
+    1. `affiliateId` (Ascendente)
+    2. `timestamp` (Ascendente)
+
+**Índice 15 (NOVO): Registros de Afiliados por Data**
+-   **Coleção:** `users`
+-   **Campos:**
+    1. `referredBy` (Ascendente)
+    2. `createdAt` (Ascendente)
+
 
 A criação desses índices pode levar alguns minutos. O status será exibido como "Construindo" no console do Firebase. A plataforma só funcionará corretamente após todos os índices estarem com o status "Ativado".
 

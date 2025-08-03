@@ -6,6 +6,7 @@ import { Footer } from '@/components/Footer';
 import { TrackingScripts } from '@/components/TrackingScripts';
 import { Suspense } from 'react';
 import { BottomNav } from '@/components/BottomNav';
+import { CustomHeadScript } from '@/components/CustomHeadScript';
 
 export const metadata: Metadata = {
   title: 'Raspadinha Oficial',
@@ -25,6 +26,9 @@ export default function RootLayout({
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet" />
          <Suspense fallback={null}>
           <TrackingScripts />
+        </Suspense>
+        <Suspense fallback={null}>
+          <CustomHeadScript />
         </Suspense>
       </head>
       <body className="font-body antialiased bg-background flex flex-col min-h-screen">

@@ -1,6 +1,4 @@
-
 'use client';
-// HMR Force Reload
 
 import { useState } from 'react';
 import {
@@ -18,13 +16,13 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { LoaderCircle } from 'lucide-react';
 import { updateUserBalance } from './actions';
-import { UserData } from './actions';
+import { UserDetailsData } from './actions';
 import { Textarea } from '@/components/ui/textarea';
 
 interface EditBalanceDialogProps {
   isOpen: boolean;
   onOpenChange: (isOpen: boolean) => void;
-  user: UserData;
+  user: UserDetailsData;
   onBalanceUpdate: () => void;
   adminId: string;
 }
@@ -134,5 +132,3 @@ export function EditBalanceDialog({ isOpen, onOpenChange, user, onBalanceUpdate,
     </Dialog>
   );
 }
-
-    

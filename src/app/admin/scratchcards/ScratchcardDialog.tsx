@@ -33,7 +33,6 @@ import { useToast } from '@/hooks/use-toast';
 import { LoaderCircle, PlusCircle, Trash2, Percent, Upload, Image as ImageIcon } from 'lucide-react';
 import { Scratchcard, saveScratchcard, Prize } from './actions';
 import { Separator } from '@/components/ui/separator';
-import { getRtpSettings } from '../scratchcard-health/actions';
 import { getCategories, Category } from '../categories/actions';
 import { Checkbox } from '@/components/ui/checkbox';
 import Image from 'next/image';
@@ -68,7 +67,6 @@ const formSchema = z.object({
   isEnabled: z.boolean(),
   prizes: z.array(prizeSchema).min(1, 'Adicione ao menos um prêmio.'),
   categoryIds: z.array(z.string()).optional(),
-  rtpRate: z.string().optional(),
 });
 
 type ScratchcardFormValues = z.infer<typeof formSchema>;
@@ -76,7 +74,6 @@ type ScratchcardFormValues = z.infer<typeof formSchema>;
 export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }: ScratchcardDialogProps) {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
-  const [rtpRate, setRtpRate] = useState<number | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [adminUser] = useAuthState(auth);
   
@@ -86,9 +83,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
   const [scratchPreview, setScratchPreview] = useState<string | null>(null);
   
   const [prizeStates, setPrizeStates] = useState<PrizeState[]>([]);
-  
-  const coverInputRef = useRef<HTMLInputElement>(null);
-  const scratchInputRef = useRef<HTMLInputElement>(null);
   const prizeFileInputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const form = useForm<ScratchcardFormValues>({
@@ -102,7 +96,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
       isEnabled: true,
       prizes: [],
       categoryIds: [],
-      rtpRate: '',
     },
   });
 
@@ -110,9 +103,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
     control: form.control,
     name: 'prizes',
   });
-
-  const watchedPrizes = form.watch('prizes');
-  const watchedRtpRate = form.watch('rtpRate');
 
   useEffect(() => {
     if (isOpen) {
@@ -122,13 +112,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
       setScratchPreview(null);
 
       const fetchInitialData = async () => {
-        const [rtpResult, categoriesResult] = await Promise.all([
-           getRtpSettings(),
-           getCategories()
-        ]);
-        
-        const currentRtpRate = rtpResult.success && rtpResult.data?.rate !== undefined ? rtpResult.data.rate : 30;
-        setRtpRate(currentRtpRate);
+        const categoriesResult = await getCategories();
         
         if (categoriesResult.success && categoriesResult.data) {
           setCategories(categoriesResult.data);
@@ -138,7 +122,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
           form.reset({
             ...scratchcard,
             categoryIds: scratchcard.categoryIds || [],
-            rtpRate: scratchcard.rtpRate?.toString() || '',
             imageUrl: scratchcard.imageUrl || '',
             scratchImageUrl: scratchcard.scratchImageUrl || '',
           });
@@ -156,7 +139,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
             isEnabled: true,
             prizes: defaultPrizes,
             categoryIds: [],
-            rtpRate: '',
           });
           setPrizeStates(defaultPrizes.map(p => ({ ...p, previewUrl: p.imageUrl })));
         }
@@ -199,38 +181,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
     }
   };
 
-
-  const probabilityRtp = watchedRtpRate ? parseFloat(watchedRtpRate) : rtpRate;
-
-  const calculateProbability = (prize: Prize, allWinnablePrizes: Prize[], currentRtp: number | null): string => {
-      if (currentRtp === null || prize.value <= 0 || allWinnablePrizes.length === 0) {
-        return '-';
-      }
-
-      const weightedPrizes = allWinnablePrizes.map(p => ({
-        id: p.id,
-        weight: 1 / (p.value + 0.1) 
-      }));
-      
-      const totalWeight = weightedPrizes.reduce((sum, p) => sum + p.weight, 0);
-      if (totalWeight === 0) {
-          return '-';
-      }
-
-      const prizeWeight = weightedPrizes.find(p => p.id === prize.id)?.weight || 0;
-      
-      const overallWinChance = currentRtp / 100;
-      const relativeChance = prizeWeight / totalWeight;
-      const finalProbability = overallWinChance * relativeChance * 100;
-      
-      if (isNaN(finalProbability)) {
-        return '-';
-      }
-      
-      return finalProbability.toFixed(4) + '%';
-  };
-
-
   const handleClose = () => {
     onOpenChange(false);
   };
@@ -263,13 +213,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
     }
     setLoading(true);
 
-    const rtpValue = data.rtpRate ? parseFloat(data.rtpRate) : undefined;
-    if (data.rtpRate && (isNaN(rtpValue) || rtpValue < 0 || rtpValue > 100)) {
-        toast({ variant: 'destructive', title: 'Erro', description: 'O RTP personalizado deve ser um número entre 0 e 100.' });
-        setLoading(false);
-        return;
-    }
-    
     // Process prizes with file uploads
     const processedPrizes = await Promise.all(data.prizes.map(async (prize, index) => {
         const prizeState = prizeStates[index];
@@ -298,7 +241,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
     const payload = {
       ...data,
       id: scratchcard?.id,
-      rtpRate: rtpValue,
       coverFileDataUrl,
       scratchFileDataUrl,
       prizes: processedPrizes, // Send processed prizes
@@ -323,8 +265,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
       });
     }
   };
-  
-  const winnablePrizes = watchedPrizes.filter(p => p.value > 0);
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -385,7 +325,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                     <Label>Imagem de Capa</Label>
                     <Input 
                         type="file" 
-                        ref={coverInputRef}
+                        ref={useRef<HTMLInputElement | null>(null)}
                         className="hidden"
                         accept="image/png, image/jpeg, image/gif, image/webp"
                         onChange={(e) => handleFileChange(e, 'cover')}
@@ -402,7 +342,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                             </div>
                         </div>
                     )}
-                    <Button type="button" variant="outline" size="sm" onClick={() => coverInputRef.current?.click()}>
+                    <Button type="button" variant="outline" size="sm" onClick={() => (document.querySelector('input[type="file"][id^="cover-input-"]') as HTMLInputElement)?.click()} id={`cover-input-${uuidv4()}`}>
                         <Upload className="mr-2 h-4 w-4" /> Escolher Imagem
                     </Button>
                     <ShadcnFormDescription>Tamanho recomendado: 400x200 pixels.</ShadcnFormDescription>
@@ -411,7 +351,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                      <Label>Imagem para Raspar (Opcional)</Label>
                     <Input 
                         type="file" 
-                        ref={scratchInputRef}
+                        ref={useRef<HTMLInputElement | null>(null)}
                         className="hidden"
                         accept="image/png, image/jpeg, image/gif, image/webp"
                         onChange={(e) => handleFileChange(e, 'scratch')}
@@ -428,50 +368,33 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                             </div>
                         </div>
                     )}
-                     <Button type="button" variant="outline" size="sm" onClick={() => scratchInputRef.current?.click()}>
+                     <Button type="button" variant="outline" size="sm" onClick={() => (document.querySelector('input[type="file"][id^="scratch-input-"]') as HTMLInputElement)?.click()} id={`scratch-input-${uuidv4()}`}>
                         <Upload className="mr-2 h-4 w-4" /> Escolher Imagem
                     </Button>
                     <ShadcnFormDescription>Se deixado em branco, será usada uma cor cinza. Tamanho recomendado: 500x500 pixels.</ShadcnFormDescription>
                 </div>
             </div>
             
-             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <FormField
-                    control={form.control}
-                    name="rtpRate"
-                    render={({ field }) => (
-                        <FormItem>
-                        <FormLabel>RTP Personalizado (%)</FormLabel>
-                        <FormControl>
-                            <Input type="number" placeholder={`Global: ${rtpRate}%`} {...field} />
-                        </FormControl>
-                        <ShadcnFormDescription>Deixe em branco para usar o RTP global.</ShadcnFormDescription>
-                        <FormMessage />
-                        </FormItem>
-                    )}
-                    />
-                <FormField
-                    control={form.control}
-                    name="isEnabled"
-                    render={({ field }) => (
-                        <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3 shadow-sm mt-5">
-                        <div className="space-y-0.5">
-                            <FormLabel>Ativada</FormLabel>
-                            <ShadcnFormDescription>
-                                Permitir que jogadores comprem e joguem.
-                            </ShadcnFormDescription>
-                        </div>
-                        <FormControl>
-                            <Switch
-                            checked={field.value}
-                            onCheckedChange={field.onChange}
-                            />
-                        </FormControl>
-                        </FormItem>
-                    )}
-                    />
-            </div>
-
+             <FormField
+                control={form.control}
+                name="isEnabled"
+                render={({ field }) => (
+                    <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3 shadow-sm mt-5">
+                    <div className="space-y-0.5">
+                        <FormLabel>Ativada</FormLabel>
+                        <ShadcnFormDescription>
+                            Permitir que jogadores comprem e joguem.
+                        </ShadcnFormDescription>
+                    </div>
+                    <FormControl>
+                        <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        />
+                    </FormControl>
+                    </FormItem>
+                )}
+                />
 
              <Separator />
             
@@ -532,7 +455,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
             <div>
               <h3 className="text-lg font-medium">Definição de Prêmios</h3>
                <p className="text-sm text-muted-foreground">
-                    Defina os prêmios. A chance de ganhar é calculada com base no valor e na taxa de RTP (RTP da raspadinha, ou o global: ${rtpRate ?? '...'}%). Prêmios maiores são mais raros. É obrigatório ter um prêmio com valor 0 (derrota).
+                    Defina os prêmios. A lógica de qual prêmio será entregue é gerenciada pelos Lotes de GGR. É obrigatório ter um prêmio com valor 0 (derrota).
                </p>
             </div>
 
@@ -576,7 +499,7 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
                                 type="file"
                                 className="hidden"
                                 accept="image/png, image/jpeg, image/gif, image/webp"
-                                ref={el => { prizeFileInputRefs.current[index] = el; }}
+                                ref={el => prizeFileInputRefs.current[index] = el}
                                 onChange={(e) => handlePrizeFileChange(e, index)}
                             />
                             <div className="flex items-center gap-4">
@@ -600,25 +523,6 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
               <PlusCircle className="mr-2 h-4 w-4" />
               Adicionar Novo Prêmio
             </Button>
-            
-            {probabilityRtp !== null && winnablePrizes.length > 0 && (
-                <div className="space-y-4 pt-4">
-                     <Separator />
-                    <h3 className="text-lg font-medium">Resumo de Probabilidades</h3>
-                    <div className="p-4 bg-secondary/50 rounded-lg space-y-2">
-                        {winnablePrizes.map(prize => (
-                            <div key={prize.id} className="flex justify-between items-center text-sm">
-                                <span className="text-muted-foreground">{prize.name} ({new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(prize.value)})</span>
-                                <span className="font-mono text-primary font-bold">
-                                    <Percent className="inline-block mr-2 h-4 w-4" />
-                                    {calculateProbability(prize, winnablePrizes, probabilityRtp)}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
 
             <DialogFooter className="pt-6">
               <Button type="button" variant="outline" onClick={handleClose}>Cancelar</Button>
@@ -632,5 +536,3 @@ export function ScratchcardDialog({ isOpen, onOpenChange, onSave, scratchcard }:
     </Dialog>
   );
 }
-
-    

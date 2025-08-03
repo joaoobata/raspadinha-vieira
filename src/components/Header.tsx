@@ -2,7 +2,7 @@
 'use client';
 
 import Link from 'next/link';
-import { LogOut, LayoutDashboard, User as UserIcon, Wallet, LayoutGrid, Plus, Gift, Banknote, Package, Users, Settings } from 'lucide-react';
+import { LogOut, LayoutDashboard, User as UserIcon, Wallet, LayoutGrid, Plus, Gift, Banknote, Package, Users, Settings, Crown, UserCog } from 'lucide-react';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth, db } from '@/lib/firebase';
 import { Button } from './ui/button';
@@ -26,6 +26,7 @@ import { Eye, RotateCw, TrendingUp } from 'lucide-react';
 import { Separator } from './ui/separator';
 import { AuthDialog } from './AuthDialog';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { Badge } from './ui/badge';
 
 export function Header() {
   const [user, loading, authError] = useAuthState(auth);
@@ -35,7 +36,7 @@ export function Header() {
     balance: number;
     prizeBalance: number;
     commissionBalance: number;
-    role: string | null;
+    roles: string[] | null;
   } | null>(null);
 
   const [isDepositOpen, setIsDepositOpen] = useState(false);
@@ -60,7 +61,13 @@ export function Header() {
       }
     };
     fetchLogo();
-
+    
+    // Check for query params to open dialogs
+    if (searchParams.get('open_signup') === 'true' && !user) {
+        openAuthDialog('signup');
+        // Clean the URL to avoid re-triggering
+        router.replace('/', { scroll: false });
+    }
     if (searchParams.get('first_deposit') === 'true' && user) {
         setIsDepositOpen(true);
         // Clean the URL to avoid re-triggering
@@ -100,14 +107,14 @@ export function Header() {
              balance: data.balance ?? 0,
              prizeBalance: data.prizeBalance ?? 0,
              commissionBalance: data.commissionBalance ?? 0,
-             role: data.role ?? null,
+             roles: data.roles ?? [],
            });
         } else {
-           setUserData({ firstName: '', lastName: '', balance: 0, prizeBalance: 0, commissionBalance: 0, role: null });
+           setUserData({ firstName: '', lastName: '', balance: 0, prizeBalance: 0, commissionBalance: 0, roles: [] });
         }
       }, (error) => {
           console.error("Error fetching user data:", error);
-          setUserData({ firstName: '', lastName: '', balance: 0, prizeBalance: 0, commissionBalance: 0, role: null });
+          setUserData({ firstName: '', lastName: '', balance: 0, prizeBalance: 0, commissionBalance: 0, roles: [] });
       });
 
       return () => unsubscribe();
@@ -139,7 +146,12 @@ export function Header() {
     setIsAuthOpen(true);
   };
   
-  const DropdownContent = () => (
+  const DropdownContent = () => {
+    const hasAffiliateRole = userData?.roles?.includes('afiliado') || userData?.roles?.includes('admin');
+    const affiliateLink = hasAffiliateRole ? '/affiliate-panel' : '/account/affiliates';
+    const affiliateLabel = hasAffiliateRole ? 'Painel de Afiliado' : 'Indique e Ganhe';
+
+    return (
     <>
         <DropdownMenuLabel className="font-normal p-4">
             <div className="flex items-center gap-4">
@@ -152,9 +164,11 @@ export function Header() {
                 </div>
                 <div className="flex flex-col space-y-1">
                     <p className="text-base font-semibold leading-none">{userData?.firstName} {userData?.lastName}</p>
-                    <p className="text-sm leading-none text-muted-foreground">
-                        Bem-vindo(a) de volta!
-                    </p>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                        {userData?.roles?.includes('admin') && <Badge variant="destructive" className="text-xs"><Crown className="mr-1 h-3 w-3" /> Admin</Badge>}
+                        {hasAffiliateRole && <Badge className="bg-blue-500 hover:bg-blue-600 text-xs"><UserCog className="mr-1 h-3 w-3" /> Afiliado</Badge>}
+                        {userData?.roles?.includes('influencer') && <Badge className="bg-purple-500 hover:bg-purple-600 text-xs"><UserCog className="mr-1 h-3 w-3" /> Influencer</Badge>}
+                    </div>
                 </div>
             </div>
         </DropdownMenuLabel>
@@ -194,10 +208,10 @@ export function Header() {
             </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild className="p-3 cursor-pointer">
-            <Link href="/account/affiliates" className="flex items-center gap-3">
+            <Link href={affiliateLink} className="flex items-center gap-3">
                 <Users className="w-5 h-5 text-muted-foreground" />
                 <div>
-                    <span className="font-semibold">Indique e Ganhe</span>
+                    <span className="font-semibold">{affiliateLabel}</span>
                     <p className="text-xs text-muted-foreground">Convide amigos e ganhe bônus</p>
                 </div>
             </Link>
@@ -212,20 +226,36 @@ export function Header() {
             </Link>
         </DropdownMenuItem>
 
-        {userData?.role === 'admin' && (
+        {(userData?.roles?.includes('admin')) && (
             <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem asChild className="p-3 cursor-pointer">
                     <Link href="/admin" className="flex items-center gap-3">
                         <LayoutDashboard className="w-5 h-5 text-muted-foreground" />
                         <div>
-                            <span className="font-semibold">Painel do Admin</span>
+                            <span className="font-semibold">Painel de Controle</span>
                             <p className="text-xs text-muted-foreground">Gerenciar a plataforma</p>
                         </div>
                     </Link>
                 </DropdownMenuItem>
             </>
         )}
+        
+        {(userData?.roles?.includes('afiliado') && !userData.roles.includes('admin')) && (
+            <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild className="p-3 cursor-pointer">
+                    <Link href="/admin" className="flex items-center gap-3">
+                        <LayoutDashboard className="w-5 h-5 text-muted-foreground" />
+                        <div>
+                            <span className="font-semibold">Painel de Afiliado</span>
+                            <p className="text-xs text-muted-foreground">Gerenciar seus indicados</p>
+                        </div>
+                    </Link>
+                </DropdownMenuItem>
+            </>
+        )}
+
 
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={handleSignOut} className="text-destructive focus:text-destructive p-3 cursor-pointer flex items-center gap-3">
@@ -236,7 +266,8 @@ export function Header() {
             </div>
         </DropdownMenuItem>
     </>
-);
+    );
+};
 
 
   const renderAuthSection = () => {

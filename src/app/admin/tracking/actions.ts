@@ -1,4 +1,3 @@
-
 'use server';
 
 import { getAdminDb } from "@/lib/firebase-admin-init";
@@ -11,6 +10,9 @@ export interface TrackingSettingsData {
     googleDeveloperToken?: string;
     googleAdsCustomerId?: string;
     googleAdsLoginCustomerId?: string;
+    tiktokPixelId?: string;
+    tiktokAccessToken?: string;
+    kwaiPixelId?: string; // Added Kwai Pixel ID
 }
 
 
@@ -35,7 +37,7 @@ export async function saveTrackingSettings(data: TrackingSettingsData, adminId: 
         const adminDb = getAdminDb();
         const settingsRef = adminDb.collection('settings').doc('tracking');
         await settingsRef.set(data, { merge: true });
-        await logAdminAction(adminId, adminId, 'SAVE_TRACKING_SETTINGS', { pixelId: data.metaPixelId, adsId: data.googleAdsId }, 'SUCCESS');
+        await logAdminAction(adminId, adminId, 'SAVE_TRACKING_SETTINGS', { pixelId: data.metaPixelId, adsId: data.googleAdsId, kwaiId: data.kwaiPixelId }, 'SUCCESS');
         return { success: true };
     } catch (error: any) {
         console.error("Error saving tracking settings: ", error);

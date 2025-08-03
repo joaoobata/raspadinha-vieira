@@ -2,7 +2,7 @@
 'use server';
 
 import { getAdminDb } from "@/lib/firebase-admin-init";
-import { Timestamp } from "firebase-admin/firestore";
+import { FieldPath, Timestamp } from "firebase-admin/firestore";
 
 // Helper function to safely convert a Timestamp to an ISO string
 const toISOStringOrNull = (timestamp: Timestamp | undefined): string | null => {
@@ -13,26 +13,39 @@ const toISOStringOrNull = (timestamp: Timestamp | undefined): string | null => {
     }
 }
 
+async function fetchUsersInBatches(adminDb: FirebaseFirestore.Firestore, userIds: string[]): Promise<Map<string, string>> {
+    const userNamesMap = new Map<string, string>();
+    if (userIds.length === 0) {
+        return userNamesMap;
+    }
+
+    // Firestore 'in' query supports a maximum of 30 elements in the array.
+    const batchSize = 30;
+    for (let i = 0; i < userIds.length; i += batchSize) {
+        const batchIds = userIds.slice(i, i + batchSize);
+        if (batchIds.length > 0) {
+            const usersSnapshot = await adminDb.collection("users").where(FieldPath.documentId(), 'in', batchIds).get();
+            usersSnapshot.docs.forEach(doc => {
+                const data = doc.data();
+                const name = `${data.firstName} ${data.lastName}`.trim() || data.email || 'Usuário Desconhecido';
+                userNamesMap.set(doc.id, name);
+            });
+        }
+    }
+    return userNamesMap;
+}
+
 export async function getTransactions(): Promise<{ success: boolean; data?: any[]; error?: string }> {
     try {
         const adminDb = getAdminDb();
-        // Fetch both transactions and users in parallel
-        const [transactionsSnapshot, usersSnapshot] = await Promise.all([
-            adminDb.collection("transactions").get(),
-            adminDb.collection("users").get()
-        ]);
-
+        const transactionsSnapshot = await adminDb.collection("transactions").orderBy("createdAt", "desc").get();
+        
         if (transactionsSnapshot.empty) {
             return { success: true, data: [] };
         }
-
-        // Create a map of user IDs to their names for efficient lookup
-        const userNamesMap = new Map<string, string>();
-        usersSnapshot.docs.forEach(doc => {
-            const data = doc.data();
-            const name = `${data.firstName} ${data.lastName}`.trim() || data.email;
-            userNamesMap.set(doc.id, name);
-        });
+        
+        const userIds = [...new Set(transactionsSnapshot.docs.map(doc => doc.data().userId))];
+        const userNamesMap = await fetchUsersInBatches(adminDb, userIds);
 
         const transactions = transactionsSnapshot.docs.map(doc => {
             const data = doc.data();
@@ -46,15 +59,6 @@ export async function getTransactions(): Promise<{ success: boolean; data?: any[
                 paidAt: toISOStringOrNull(data.paidAt),
             }
         });
-        
-        // Sort manually to avoid Firestore index issues
-        transactions.sort((a, b) => {
-            if (a.createdAt && b.createdAt) {
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-            }
-            return 0;
-        });
-
 
         return { success: true, data: transactions };
 

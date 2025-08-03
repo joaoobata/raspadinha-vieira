@@ -9,11 +9,12 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { getSettings, saveSettings, SettingsData } from './actions';
 import { Skeleton } from '@/components/ui/skeleton';
-import { LoaderCircle, Percent, RotateCw, Info, Palette, Upload } from 'lucide-react';
+import { LoaderCircle, Percent, RotateCw, Info, Palette, Upload, Code, Music } from 'lucide-react';
 import Image from 'next/image';
 import { Separator } from '@/components/ui/separator';
 import { useAuthState } from 'react-firebase-hooks/auth';
 import { auth } from '@/lib/firebase';
+import { Textarea } from '@/components/ui/textarea';
 
 export default function AdminSettingsPage() {
     const { toast } = useToast();
@@ -30,6 +31,10 @@ export default function AdminSettingsPage() {
         colorPrimary: '',
         colorBackground: '',
         colorAccent: '',
+        customHeadScript: '',
+        soundWinUrl: '',
+        soundLoseUrl: '',
+        soundScratchUrl: '',
     });
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -37,6 +42,14 @@ export default function AdminSettingsPage() {
     const [logoFile, setLogoFile] = useState<File | null>(null);
     const [logoPreview, setLogoPreview] = useState<string | null>(null);
     const logoInputRef = useRef<HTMLInputElement>(null);
+    
+    const [soundWinFile, setSoundWinFile] = useState<File | null>(null);
+    const [soundLoseFile, setSoundLoseFile] = useState<File | null>(null);
+    const [soundScratchFile, setSoundScratchFile] = useState<File | null>(null);
+
+    const soundWinInputRef = useRef<HTMLInputElement>(null);
+    const soundLoseInputRef = useRef<HTMLInputElement>(null);
+    const soundScratchInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         fetchSettings();
@@ -58,7 +71,7 @@ export default function AdminSettingsPage() {
         setLoading(false);
     };
 
-    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
         const { name, value } = e.target;
         setSettings(prev => ({ ...prev, [name]: name.includes('min') || name.includes('commission') || name.includes('rollover') ? parseFloat(value) || 0 : value }));
     };
@@ -74,6 +87,17 @@ export default function AdminSettingsPage() {
             reader.readAsDataURL(file);
         }
     };
+    
+    const handleSoundFileChange = (e: React.ChangeEvent<HTMLInputElement>, type: 'win' | 'lose' | 'scratch') => {
+        const file = e.target.files?.[0];
+        if (file) {
+            switch(type) {
+                case 'win': setSoundWinFile(file); break;
+                case 'lose': setSoundLoseFile(file); break;
+                case 'scratch': setSoundScratchFile(file); break;
+            }
+        }
+    }
     
     const fileToDataUrl = (file: File): Promise<string> => {
         return new Promise((resolve, reject) => {
@@ -93,11 +117,27 @@ export default function AdminSettingsPage() {
             logoFileDataUrl = await fileToDataUrl(logoFile);
         }
 
-        const result = await saveSettings(settings, adminUser.uid, logoFileDataUrl);
+        let soundWinFileDataUrl: string | undefined = undefined;
+        if (soundWinFile) {
+            soundWinFileDataUrl = await fileToDataUrl(soundWinFile);
+        }
+        
+        let soundLoseFileDataUrl: string | undefined = undefined;
+        if (soundLoseFile) {
+            soundLoseFileDataUrl = await fileToDataUrl(soundLoseFile);
+        }
+
+        let soundScratchFileDataUrl: string | undefined = undefined;
+        if (soundScratchFile) {
+            soundScratchFileDataUrl = await fileToDataUrl(soundScratchFile);
+        }
+
+
+        const result = await saveSettings(settings, adminUser.uid, logoFileDataUrl, soundWinFileDataUrl, soundLoseFileDataUrl, soundScratchFileDataUrl);
         if (result.success) {
             toast({
                 title: 'Sucesso!',
-                description: 'Configurações salvas. As cores do site podem levar um momento para serem atualizadas.',
+                description: 'Configurações salvas. As alterações podem levar um momento para serem refletidas em todo o site.',
             });
              // Reload the page to reflect color changes
             window.location.reload();
@@ -207,6 +247,34 @@ export default function AdminSettingsPage() {
                     </div>
                 </CardContent>
             </Card>
+            
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><Music/> Efeitos Sonoros</CardTitle>
+                    <CardDescription>
+                       Faça o upload dos seus efeitos sonoros para o jogo. Use arquivos pequenos (.mp3, .wav) para melhor performance.
+                    </CardDescription>
+                </CardHeader>
+                 <CardContent className="space-y-4">
+                    <div className="grid md:grid-cols-3 gap-6">
+                        <div className="space-y-2">
+                            <Label htmlFor="soundWinUrl">Som de Vitória</Label>
+                             <Input id="soundWinUrl" name="soundWinUrl" type="file" accept="audio/*" ref={soundWinInputRef} onChange={(e) => handleSoundFileChange(e, 'win')} />
+                             {settings.soundWinUrl && <p className="text-xs text-muted-foreground">Atual: <a href={settings.soundWinUrl} target="_blank" rel="noopener noreferrer" className="underline">Ouvir</a></p>}
+                        </div>
+                         <div className="space-y-2">
+                            <Label htmlFor="soundLoseUrl">Som de Derrota</Label>
+                            <Input id="soundLoseUrl" name="soundLoseUrl" type="file" accept="audio/*" ref={soundLoseInputRef} onChange={(e) => handleSoundFileChange(e, 'lose')} />
+                            {settings.soundLoseUrl && <p className="text-xs text-muted-foreground">Atual: <a href={settings.soundLoseUrl} target="_blank" rel="noopener noreferrer" className="underline">Ouvir</a></p>}
+                        </div>
+                         <div className="space-y-2">
+                            <Label htmlFor="soundScratchUrl">Som de Raspar</Label>
+                             <Input id="soundScratchUrl" name="soundScratchUrl" type="file" accept="audio/*" ref={soundScratchInputRef} onChange={(e) => handleSoundFileChange(e, 'scratch')} />
+                             {settings.soundScratchUrl && <p className="text-xs text-muted-foreground">Atual: <a href={settings.soundScratchUrl} target="_blank" rel="noopener noreferrer" className="underline">Ouvir</a></p>}
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
 
             <Card>
                 <CardHeader>
@@ -300,6 +368,29 @@ export default function AdminSettingsPage() {
                              <p className="text-xs text-muted-foreground flex items-center gap-1"><Info className="h-3 w-3" /> Ex: 1 = precisa apostar 1x o valor depositado.</p>
                         </div>
                      </div>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2"><Code/> Scripts Personalizados</CardTitle>
+                    <CardDescription>
+                        Insira aqui scripts para serem adicionados ao &lt;head&gt; de todas as páginas. Use com cuidado.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent>
+                     <div className="space-y-2">
+                        <Label htmlFor="customHeadScript">Script do Head</Label>
+                        <Textarea
+                            id="customHeadScript"
+                            name="customHeadScript"
+                            value={settings.customHeadScript}
+                            onChange={handleInputChange}
+                            placeholder="<!-- Cole seu script aqui, incluindo as tags <script>... -->"
+                            rows={8}
+                            className="font-mono text-xs"
+                        />
+                    </div>
                 </CardContent>
             </Card>
 

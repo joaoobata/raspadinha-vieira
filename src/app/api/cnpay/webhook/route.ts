@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin-init';
 import { FieldValue } from 'firebase-admin/firestore';
 import { creditCommission } from '@/app/actions/commission';
-import { trackServerEvent } from '@/lib/tracking';
+import { trackServerEvent, sendAffiliatePostback, sendDataLayerEvent } from '@/lib/tracking';
 
 async function logErrorToFirestore(errorMessage: string, webhookData: any) {
     try {
@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
     let userId: string | null = null;
     let amount: number | null = null;
     let docId: string | null = null;
-    let commissionProcessed = false;
+    let wasFtd = false;
 
     await adminDb.runTransaction(async (tx) => {
         const snapshot = await tx.get(q);
@@ -102,12 +102,21 @@ export async function POST(req: NextRequest) {
             throw new Error(errorMessage);
         }
         
-        // Populate details for post-transaction logic
         userId = transactionData.userId;
         amount = transactionData.amount;
         docId = transactionDoc.id;
 
-        // Only update status if it's not already completed
+        const userRef = adminDb.collection('users').doc(userId);
+        const userDoc = await tx.get(userRef);
+        const userData = userDoc.data();
+
+        // Check for First Time Deposit (FTD)
+        if (userData && userData.ftd === false) {
+            wasFtd = true;
+            tx.update(userRef, { ftd: true });
+        }
+
+
         if (transactionData.status !== 'COMPLETED') {
             const paymentDate = transaction.paidAt || transaction.payedAt;
             if (!paymentDate) {
@@ -121,28 +130,37 @@ export async function POST(req: NextRequest) {
                 paidAt: new Date(paymentDate),
                 webhookData: webhookData,
             });
-            commissionProcessed = true; // Mark for processing after transaction
+
             console.log(`Transaction ${identifier} marked as COMPLETED.`);
         } else {
              console.log(`Webhook ignored status update: Transaction ${identifier} is already completed.`);
         }
     });
 
-    // --- COMMISSION, BALANCE & TRACKING LOGIC (OUTSIDE THE TRANSACTION) ---
-    // Only run this if the transaction status was updated in this call.
-    if (commissionProcessed && userId && amount && docId) {
-        console.log(`Triggering commission, balance, and tracking for transaction ID: ${docId}`);
-        // This function handles balance update, ledger, and commissions idempotently.
+    if (userId && amount && docId) {
         await creditCommission(userId, amount, docId);
         
-        // Server-side conversion tracking
+        // Use the new server-side dataLayer event sender
+        const eventName = wasFtd ? 'ftd_complete' : 'redeposit_complete';
+        await sendDataLayerEvent(userId, eventName, {
+            value: amount,
+            currency: 'BRL',
+            transaction_id: docId,
+        });
+
+        // This will still trigger Meta CAPI, TikTok API etc.
         await trackServerEvent(userId, {
             eventName: 'Purchase',
             value: amount,
             currency: 'BRL',
             transactionId: docId
         });
+
+        if (wasFtd) {
+            await sendAffiliatePostback(userId, amount, docId);
+        }
     }
+
 
     return NextResponse.json({ status: 'success' }, { status: 200 });
 

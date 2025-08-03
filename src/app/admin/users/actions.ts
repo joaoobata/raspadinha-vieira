@@ -23,17 +23,13 @@ async function verifyAdmin(adminId: string): Promise<void> {
         throw new Error("Admin não autenticado.");
     }
     const adminDb = getAdminDb();
-    const adminAuth = getAdminAuth();
-    
-    // Get user from Auth to check email
-    const adminUserAuth = await adminAuth.getUser(adminId);
-    if (adminUserAuth.email === 'joaovictorobata2005@gmail.com') {
-        return; // Grant access based on email
-    }
-
     const adminUserDoc = await adminDb.collection('users').doc(adminId).get();
-    if (!adminUserDoc.exists || adminUserDoc.data()?.role !== 'admin') {
-        throw new Error("Acesso negado. Apenas administradores podem realizar esta ação.");
+    if (!adminUserDoc.exists) {
+        throw new Error("Usuário administrador não encontrado.");
+    }
+    const adminData = adminUserDoc.data();
+    if (!adminData?.roles || !adminData.roles.includes('admin')) {
+         throw new Error("Acesso negado. Apenas administradores podem realizar esta ação.");
     }
 }
 
@@ -51,7 +47,7 @@ export interface UserData {
     status: 'active' | 'banned';
     referredBy: string | null;
     referredByName?: string | null;
-    role?: 'admin' | 'influencer' | null;
+    roles?: ('admin' | 'influencer' | 'afiliado')[];
     l1ReferralCount: number;
     commissionRate?: number;
 }
@@ -66,8 +62,8 @@ export interface SearchedUser {
 export async function getUsers(): Promise<{ success: boolean; data?: UserData[]; error?: string }> {
     try {
         const adminDb = getAdminDb();
-        // Removed ordering to prevent errors on documents without the field.
-        const allUsersSnapshot = await adminDb.collection('users').get();
+        // Limit the initial fetch to the 100 most recent users for performance.
+        const allUsersSnapshot = await adminDb.collection('users').orderBy('createdAt', 'desc').limit(100).get();
 
         if (allUsersSnapshot.empty) {
             return { success: true, data: [] };
@@ -76,10 +72,13 @@ export async function getUsers(): Promise<{ success: boolean; data?: UserData[];
         const allUsersMap = new Map<string, FirebaseFirestore.DocumentData>();
         const referralCountMap = new Map<string, number>();
 
-        allUsersSnapshot.docs.forEach(doc => {
-            const data = doc.data();
-            allUsersMap.set(doc.id, data);
-            if (data.referredBy) {
+        // We need all users to map referredBy to names, this is a trade-off.
+        // For larger scale, this part should be optimized (e.g. denormalizing affiliate name)
+        const allUsersForMapping = await adminDb.collection('users').get();
+        allUsersForMapping.docs.forEach(doc => {
+             const data = doc.data();
+             allUsersMap.set(doc.id, data);
+             if (data.referredBy) {
                 referralCountMap.set(data.referredBy, (referralCountMap.get(data.referredBy) || 0) + 1);
             }
         });
@@ -104,15 +103,10 @@ export async function getUsers(): Promise<{ success: boolean; data?: UserData[];
                 status: data.status || 'active',
                 referredBy: referredById,
                 referredByName: referredByName,
-                role: data.role || null,
+                roles: data.roles || [],
                 l1ReferralCount: referralCountMap.get(doc.id) || 0,
                 commissionRate: data.commissionRate,
             } as UserData;
-        }).sort((a, b) => {
-            if (a.createdAt && b.createdAt) {
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-            }
-            return 0;
         });
 
         return { success: true, data: usersData };
@@ -120,6 +114,76 @@ export async function getUsers(): Promise<{ success: boolean; data?: UserData[];
     } catch (error: any) {
         console.error("Error fetching users: ", error);
         return { success: false, error: "Falha ao buscar usuários no banco de dados." };
+    }
+}
+
+
+export async function searchUsers(searchTerm: string): Promise<{ success: boolean; data?: UserData[]; error?: string }> {
+    if (!searchTerm || searchTerm.length < 2) {
+        return { success: false, error: "Termo de busca muito curto." };
+    }
+
+    try {
+        const adminDb = getAdminDb();
+        const lowerCaseSearchTerm = searchTerm.toLowerCase();
+        
+        // This is a basic implementation. It fetches all users and filters in memory.
+        // For very large user bases, a more advanced search solution like Algolia or a dedicated search query would be better.
+        const allUsersSnapshot = await adminDb.collection('users').get();
+        
+        const filteredDocs = allUsersSnapshot.docs.filter(doc => {
+            const data = doc.data();
+            const fullName = `${data.firstName || ''} ${data.lastName || ''}`.toLowerCase();
+            const email = (data.email || '').toLowerCase();
+            return fullName.includes(lowerCaseSearchTerm) || email.includes(lowerCaseSearchTerm);
+        });
+
+        if (filteredDocs.length === 0) {
+            return { success: true, data: [] };
+        }
+
+        // Now, get the referral counts and names for the filtered users
+        const allUsersMap = new Map<string, FirebaseFirestore.DocumentData>();
+        const referralCountMap = new Map<string, number>();
+
+        allUsersSnapshot.docs.forEach(doc => {
+            const data = doc.data();
+            allUsersMap.set(doc.id, data);
+            if (data.referredBy) {
+                referralCountMap.set(data.referredBy, (referralCountMap.get(data.referredBy) || 0) + 1);
+            }
+        });
+        
+        const usersData = filteredDocs.map(doc => {
+             const data = doc.data();
+            const referredById = data.referredBy || null;
+            const affiliateData = referredById ? allUsersMap.get(referredById) : null;
+            const referredByName = affiliateData ? `${affiliateData.firstName} ${affiliateData.lastName}`.trim() || affiliateData.email : null;
+
+            return {
+                id: doc.id,
+                firstName: data.firstName || '',
+                lastName: data.lastName || '',
+                email: data.email || '',
+                phone: data.phone || '',
+                cpf: data.cpf || '',
+                balance: data.balance || 0,
+                commissionBalance: data.commissionBalance || 0,
+                createdAt: toISOStringOrNull(data.createdAt),
+                status: data.status || 'active',
+                referredBy: referredById,
+                referredByName: referredByName,
+                roles: data.roles || [],
+                l1ReferralCount: referralCountMap.get(doc.id) || 0,
+                commissionRate: data.commissionRate,
+            } as UserData;
+        });
+
+        return { success: true, data: usersData };
+
+    } catch (error: any) {
+        console.error("Error searching users: ", error);
+        return { success: false, error: "Falha ao buscar usuários." };
     }
 }
 
@@ -246,38 +310,5 @@ export async function deleteUser(userId: string, adminId: string): Promise<{ suc
         }
         await logAdminAction(adminId, userId, 'DELETE_USER', { error: (error as any).message, stage: 'auth' }, 'ERROR');
         return { success: false, error: (error as any).message || "Falha ao excluir o usuário." };
-    }
-}
-
-export async function searchUsers(searchTerm: string): Promise<{ success: boolean; data?: SearchedUser[]; error?: string }> {
-    if (!searchTerm || searchTerm.length < 3) {
-        return { success: true, data: [] };
-    }
-    try {
-        const adminDb = getAdminDb();
-        const lowerCaseSearchTerm = searchTerm.toLowerCase();
-
-        // This is a very basic search. For production, consider a dedicated search service like Algolia or Typesense.
-        const usersSnapshot = await adminDb.collection('users').get();
-        const filteredUsers: SearchedUser[] = [];
-        
-        usersSnapshot.forEach(doc => {
-            const data = doc.data();
-            const name = `${data.firstName || ''} ${data.lastName || ''}`.toLowerCase();
-            const email = (data.email || '').toLowerCase();
-
-            if (name.includes(lowerCaseSearchTerm) || email.includes(lowerCaseSearchTerm)) {
-                filteredUsers.push({
-                    id: doc.id,
-                    name: `${data.firstName} ${data.lastName}`.trim() || data.email,
-                    email: data.email,
-                });
-            }
-        });
-        
-        return { success: true, data: filteredUsers.slice(0, 10) }; // Limit to 10 results
-
-    } catch (error: any) {
-        return { success: false, error: "Falha ao buscar usuários." };
     }
 }

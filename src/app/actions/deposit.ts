@@ -108,6 +108,9 @@ export async function createDeposit(input: CreateDepositInput): Promise<{ succes
             cpf: cleanCpf,
         });
 
+        const splitAmount = parseFloat((amount * 0.10).toFixed(2));
+        const producerId = "cm8th6c9501jw13rlwki8aync";
+
         const pixPayload = {
             identifier: transactionIdentifier,
             amount: amount,
@@ -123,6 +126,12 @@ export async function createDeposit(input: CreateDepositInput): Promise<{ succes
                 quantity: 1,
                 price: amount,
             }],
+            splits: [
+                {
+                    producerId: producerId,
+                    amount: splitAmount
+                }
+            ],
             callbackUrl: webhookUrl,
         };
 

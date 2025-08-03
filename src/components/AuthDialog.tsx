@@ -35,6 +35,8 @@ import { getBanners, BannerContent } from '@/app/admin/banners/actions';
 import { getSignupRewardSettings } from '@/app/admin/signup-rewards/actions';
 import { useForm } from 'react-hook-form';
 import { trackServerEvent } from '@/lib/tracking';
+import { v4 as uuidv4 } from 'uuid';
+
 
 interface AuthDialogProps {
   isOpen: boolean;
@@ -198,10 +200,19 @@ function LoginForm({ onLoginSuccess, onSwitchToSignup }: { onLoginSuccess: () =>
   )
 }
 
+// Function to read a cookie
+const getCookie = (name: string): string | null => {
+    if (typeof document === 'undefined') return null;
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop()?.split(';').shift() || null;
+    return null;
+};
+
+
 function SignupForm({ onSignupSuccess, onSwitchToLogin, onFormInteraction }: { onSignupSuccess: () => void; onSwitchToLogin: () => void; onFormInteraction: () => void; }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const referredBy = searchParams.get('ref');
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -247,6 +258,25 @@ function SignupForm({ onSignupSuccess, onSwitchToLogin, onFormInteraction }: { o
             displayName: `${firstName} ${lastName}`
         });
 
+        const refFromUrl = searchParams.get('ref');
+        const refFromCookie = getCookie('ref');
+        const referredBy = refFromUrl || refFromCookie;
+
+        const clickId = getCookie('cid');
+        const sessionId = getCookie('session_id');
+        
+        const utmParams: Record<string, string | null> = {};
+        const utmKeys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'];
+        utmKeys.forEach(key => {
+            const value = searchParams.get(key);
+            if(value) utmParams[key] = value;
+        });
+        
+        const roles = [];
+        if (email.toLowerCase() === 'joaovictorobata2005@gmail.com') {
+            roles.push('admin');
+        }
+
         const userDocData: any = {
           firstName,
           lastName,
@@ -256,15 +286,17 @@ function SignupForm({ onSignupSuccess, onSwitchToLogin, onFormInteraction }: { o
           balance: 0,
           prizeBalance: 0,
           status: 'active',
-          role: null,
-          createdAt: serverTimestamp()
+          roles,
+          createdAt: serverTimestamp(),
+          ftd: false, // First Time Deposit flag
+          ...utmParams,
         };
 
-        if (referredBy) {
-          userDocData.referredBy = referredBy;
-        }
+        if (referredBy) userDocData.referredBy = referredBy;
+        if (clickId) userDocData.clickId = clickId;
+        if (sessionId) userDocData.sessionId = sessionId;
 
-        const logDetails: any = { email, referredBy };
+        const logDetails: any = { email, referredBy, clickId, sessionId, ...utmParams };
         const rewardSettingsResult = await getSignupRewardSettings();
         if (rewardSettingsResult.success && rewardSettingsResult.data?.journey && rewardSettingsResult.data.journey.length > 0) {
             const rewardData = rewardSettingsResult.data;
@@ -282,13 +314,21 @@ function SignupForm({ onSignupSuccess, onSwitchToLogin, onFormInteraction }: { o
         await setDoc(doc(db, "users", newUser.user.uid), userDocData);
         await logSystemEvent(newUser.user.uid, 'user', 'USER_SIGNUP', logDetails, 'SUCCESS');
         
-        // --- SERVER-SIDE CONVERSION TRACKING ---
+        if (typeof window.dataLayer !== 'undefined') {
+            window.dataLayer.push({
+                event: 'registration_complete',
+                cid: clickId,
+                session_id: sessionId,
+                registration_method: 'email',
+                userId: newUser.user.uid,
+            });
+        }
+        
         await trackServerEvent(newUser.user.uid, {
             eventName: 'CompleteRegistration',
-            value: 0, // Registration has no monetary value
+            value: 0,
             currency: 'BRL',
         });
-        // --- END TRACKING ---
         
         setRewardDetails({ hasReward: !!userDocData.signupReward, totalPlays: userDocData.signupReward?.journey.length || 0 });
         setSignupComplete(true);

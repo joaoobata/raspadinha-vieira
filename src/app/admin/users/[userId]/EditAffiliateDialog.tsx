@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
@@ -16,8 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { LoaderCircle, Search, User, X, Link as LinkIcon } from 'lucide-react';
-import { UserDetailsData, updateUserAffiliate } from './actions';
-import { SearchedUser, searchUsers } from '../actions';
+import { UserDetailsData, updateUserAffiliate, searchUsers } from './actions';
 
 interface EditAffiliateDialogProps {
   isOpen: boolean;
@@ -30,8 +28,8 @@ interface EditAffiliateDialogProps {
 export function EditAffiliateDialog({ isOpen, onOpenChange, user, onAffiliateUpdate, adminId }: EditAffiliateDialogProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [debouncedSearchTerm] = useDebounce(searchTerm, 500);
-  const [searchResults, setSearchResults] = useState<SearchedUser[]>([]);
-  const [selectedAffiliate, setSelectedAffiliate] = useState<SearchedUser | null>(null);
+  const [searchResults, setSearchResults] = useState<UserDetailsData[]>([]);
+  const [selectedAffiliate, setSelectedAffiliate] = useState<UserDetailsData | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
@@ -44,7 +42,8 @@ export function EditAffiliateDialog({ isOpen, onOpenChange, user, onAffiliateUpd
     setIsSearching(true);
     const result = await searchUsers(debouncedSearchTerm);
     if (result.success && result.data) {
-      setSearchResults(result.data.filter(u => u.id !== user.id)); // Exclude the user themselves
+      // Exclude the current user from the search results to prevent self-affiliation
+      setSearchResults(result.data.filter(u => u.id !== user.id)); 
     }
     setIsSearching(false);
   }, [debouncedSearchTerm, user.id]);
@@ -53,7 +52,7 @@ export function EditAffiliateDialog({ isOpen, onOpenChange, user, onAffiliateUpd
     handleSearch();
   }, [handleSearch]);
 
-  const handleSelectAffiliate = (affiliate: SearchedUser) => {
+  const handleSelectAffiliate = (affiliate: UserDetailsData) => {
     setSelectedAffiliate(affiliate);
     setSearchTerm('');
     setSearchResults([]);
@@ -144,7 +143,7 @@ export function EditAffiliateDialog({ isOpen, onOpenChange, user, onAffiliateUpd
                      <div className="border rounded-md max-h-40 overflow-y-auto">
                          {searchResults.map(res => (
                             <button key={res.id} onClick={() => handleSelectAffiliate(res)} className="w-full text-left p-3 hover:bg-secondary transition-colors">
-                                <p className="font-medium">{res.name}</p>
+                                <p className="font-medium">{`${res.firstName} ${res.lastName}`.trim()}</p>
                                 <p className="text-sm text-muted-foreground">{res.email}</p>
                             </button>
                          ))}
@@ -157,7 +156,7 @@ export function EditAffiliateDialog({ isOpen, onOpenChange, user, onAffiliateUpd
                      <div className="flex justify-between items-center">
                         <div>
                              <p className="text-sm text-muted-foreground">Novo Afiliado Selecionado:</p>
-                             <p className="font-semibold text-primary">{selectedAffiliate.name}</p>
+                             <p className="font-semibold text-primary">{selectedAffiliate.firstName} {selectedAffiliate.lastName}</p>
                         </div>
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setSelectedAffiliate(null)}>
                             <X className="h-4 w-4" />

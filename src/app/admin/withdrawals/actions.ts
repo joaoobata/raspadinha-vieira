@@ -2,7 +2,7 @@
 'use server';
 
 import { getAdminDb } from "@/lib/firebase-admin-init";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { FieldValue, Timestamp, FieldPath } from "firebase-admin/firestore";
 import { createTransfer } from "@/lib/cnpay";
 import { normalizeString } from '@/lib/utils';
 import axios from 'axios';
@@ -69,26 +69,39 @@ const toISOStringOrNull = (timestamp: Timestamp | undefined): string | null => {
     }
 }
 
+async function fetchUsersInBatches(adminDb: FirebaseFirestore.Firestore, userIds: string[]): Promise<Map<string, string>> {
+    const userNamesMap = new Map<string, string>();
+    if (userIds.length === 0) {
+        return userNamesMap;
+    }
+
+    // Firestore 'in' query supports a maximum of 30 elements in the array.
+    const batchSize = 30;
+    for (let i = 0; i < userIds.length; i += batchSize) {
+        const batchIds = userIds.slice(i, i + batchSize);
+        if (batchIds.length > 0) {
+            const usersSnapshot = await adminDb.collection("users").where(FieldPath.documentId(), 'in', batchIds).get();
+            usersSnapshot.docs.forEach(doc => {
+                const data = doc.data();
+                const name = `${data.firstName} ${data.lastName}`.trim() || data.email || 'Usuário Desconhecido';
+                userNamesMap.set(doc.id, name);
+            });
+        }
+    }
+    return userNamesMap;
+}
+
 export async function getWithdrawals(): Promise<{ success: boolean; data?: any[]; error?: string }> {
     try {
         const adminDb = getAdminDb();
-        // Fetch both withdrawals and users in parallel
-        const [withdrawalsSnapshot, usersSnapshot] = await Promise.all([
-            adminDb.collection("withdrawals").orderBy("createdAt", "desc").get(),
-            adminDb.collection("users").get()
-        ]);
-
+        const withdrawalsSnapshot = await adminDb.collection("withdrawals").orderBy("createdAt", "desc").get();
+        
         if (withdrawalsSnapshot.empty) {
             return { success: true, data: [] };
         }
-
-        // Create a map of user IDs to their names for efficient lookup
-        const userNamesMap = new Map<string, string>();
-        usersSnapshot.docs.forEach(doc => {
-            const data = doc.data();
-            const name = `${data.firstName} ${data.lastName}`.trim() || data.email;
-            userNamesMap.set(doc.id, name);
-        });
+        
+        const userIds = [...new Set(withdrawalsSnapshot.docs.map(doc => doc.data().userId))];
+        const userNamesMap = await fetchUsersInBatches(adminDb, userIds);
 
         const withdrawals = withdrawalsSnapshot.docs.map(doc => {
             const data = doc.data();
@@ -158,7 +171,7 @@ export async function processWithdrawal(
         }
         const webhookUrl = new URL('/api/cnpay/withdrawal-webhook', baseUrl).toString();
         
-        // Get the server's public IPv4 to send in the payload.
+        // REVERTED: Now we always get the server's IP for the gateway call, as this is more reliable in the admin context.
         const serverIp = await getPublicIPv4();
         
         const transferPayload = {
@@ -172,7 +185,7 @@ export async function processWithdrawal(
             owner: {
                 name: withdrawalData.ownerData.name,
                 document: withdrawalData.ownerData.document,
-                ip: serverIp, // CRITICAL FIX: Use the server's public IPv4 address.
+                ip: serverIp,
             },
             callbackUrl: webhookUrl,
         };

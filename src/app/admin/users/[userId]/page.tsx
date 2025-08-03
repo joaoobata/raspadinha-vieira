@@ -1,14 +1,15 @@
-'use client';
-// This comment is added to force a module reload and resolve HMR issues.
 
-import { useEffect, useState, useMemo } from 'react';
+// This comment is added to force a module reload and resolve HMR issues.
+'use client';
+
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { auth } from '@/lib/firebase';
+import { getFirebaseAuth, getFirestoreDb } from '@/lib/firebase';
 import { 
     ArrowLeft, User, Wallet, Landmark, Banknote, History, Gift, Users as UsersIcon, 
-    Percent, Pencil, Shield, Crown, TrendingUp, TrendingDown, Coins, PlusCircle, Gamepad2, Handshake, Lock, Edit, ChevronDown, Search
+    Percent, Pencil, Shield, Crown, TrendingUp, TrendingDown, Coins, PlusCircle, Gamepad2, Handshake, Lock, Edit, ChevronDown, Search, Link2, LoaderCircle, Award
 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from '@/components/ui/button';
@@ -17,11 +18,12 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from '@/lib/utils';
 import { useDebounce } from 'use-debounce';
+import { Checkbox } from '@/components/ui/checkbox';
 
 
 import { 
     getUserDetails, getUserLedger, UserDetailsData, LedgerEntry, UserRole, 
-    updateUserRole, updateUserRtp, LedgerEntryType, DirectReferral
+    updateUserRoles, updateUserDemoProfile, LedgerEntryType, DirectReferral, updateUserPostbackUrl, DemoPrizeProfile
 } from './actions';
 import { Separator } from '@/components/ui/separator';
 import { UserDetailsCommissionDialogL1 } from './UserDetailsCommissionDialog';
@@ -29,7 +31,6 @@ import { UserDetailsCommissionDialogL2 } from './UserDetailsCommissionDialogL2';
 import { UserDetailsCommissionDialogL3 } from './UserDetailsCommissionDialogL3';
 import { EditUserDialog } from './EditUserDialog';
 import { EditPasswordDialog } from './EditPasswordDialog';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -37,6 +38,10 @@ import { getSettings } from '../../settings/actions';
 import { EditCustomCommissionDialog } from './EditCustomCommissionDialog';
 import { EditAffiliateDialog } from './EditAffiliateDialog';
 import { EditBalanceDialog } from '../EditBalanceDialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
+
+const auth = getFirebaseAuth();
 
 const ReferralTable = ({
   title,
@@ -149,84 +154,131 @@ export default function UserDetailsPage() {
     const [isEditPasswordDialogOpen, setIsEditPasswordDialogOpen] = useState(false);
     const [isEditAffiliateDialogOpen, setIsEditAffiliateDialogOpen] = useState(false);
     const [isEditBalanceDialogOpen, setIsEditBalanceDialogOpen] = useState(false);
-    const [isSavingRole, setIsSavingRole] = useState(false);
-    const [isSavingRtp, setIsSavingRtp] = useState(false);
-    const [customRtp, setCustomRtp] = useState('');
+    const [isSavingRoles, setIsSavingRoles] = useState(false);
+    const [isSavingDemoProfile, setIsSavingDemoProfile] = useState(false);
+    const [isSavingPostback, setIsSavingPostback] = useState(false);
+    const [demoProfile, setDemoProfile] = useState<DemoPrizeProfile>('medium');
+    const [postbackUrl, setPostbackUrl] = useState('');
     const [globalSettings, setGlobalSettings] = useState<{commissionRateL1?: number, commissionRateL2?: number, commissionRateL3?: number}>({});
     const [editingCustomCommission, setEditingCustomCommission] = useState<DirectReferral | null>(null);
     
     const [referralSearchTerm, setReferralSearchTerm] = useState('');
     const [debouncedReferralSearch] = useDebounce(referralSearchTerm, 300);
 
-    const fetchData = async () => {
+    const [lastLedgerDocId, setLastLedgerDocId] = useState<string | null>(null);
+    const [loadingMoreLedger, setLoadingMoreLedger] = useState(false);
+
+
+    const fetchUserDetails = useCallback(async () => {
         if (!userId) return;
         setLoading(true);
         setError(null);
-        setLedgerError(null);
         try {
-            const [detailsResult, ledgerResult, settingsResult] = await Promise.all([
+            const [detailsResult, settingsResult] = await Promise.all([
                 getUserDetails(userId),
-                getUserLedger(userId),
                 getSettings()
             ]);
 
             if (detailsResult.success && detailsResult.data) {
                 setUser(detailsResult.data);
-                setCustomRtp(detailsResult.data.rtpRate?.toString() || '');
+                setDemoProfile(detailsResult.data.demoPrizeProfile || 'medium');
+                setPostbackUrl(detailsResult.data.postbackUrl || '');
             } else {
                 setError(detailsResult.error || 'Falha ao buscar detalhes do usuário.');
             }
             
-            if (ledgerResult.success && ledgerResult.data) {
-                setLedger(ledgerResult.data);
-            } else {
-                 setLedgerError(ledgerResult.error || 'Falha ao buscar extrato.');
-            }
-
             if (settingsResult.success && settingsResult.data) {
                 setGlobalSettings(settingsResult.data);
             }
-
         } catch (err: any) {
-            console.error("Error fetching user data:", err);
+            console.error("Error fetching user details:", err);
             setError("Ocorreu um erro inesperado ao carregar os dados.");
         } finally {
             setLoading(false);
         }
-    };
+    }, [userId]);
+    
+    const fetchInitialLedger = useCallback(async () => {
+        if (!userId) return;
+        setLedgerError(null);
+        setLoadingMoreLedger(true);
+        try {
+            const ledgerResult = await getUserLedger(userId);
+            if (ledgerResult.success && ledgerResult.data) {
+                setLedger(ledgerResult.data.entries);
+                setLastLedgerDocId(ledgerResult.data.lastDocId);
+            } else {
+                setLedgerError(ledgerResult.error || 'Falha ao buscar extrato.');
+            }
+        } catch(err: any) {
+            setLedgerError("Ocorreu um erro inesperado ao carregar o extrato.");
+        } finally {
+            setLoadingMoreLedger(false);
+        }
+    }, [userId]);
+    
+    const loadMoreLedgerEntries = async () => {
+        if (!userId || !lastLedgerDocId || loadingMoreLedger) return;
+        setLoadingMoreLedger(true);
+        try {
+            const ledgerResult = await getUserLedger(userId, lastLedgerDocId);
+            if (ledgerResult.success && ledgerResult.data) {
+                setLedger(prev => [...prev, ...ledgerResult.data.entries]);
+                setLastLedgerDocId(ledgerResult.data.lastDocId);
+            } else {
+                toast({ variant: 'destructive', title: 'Erro', description: ledgerResult.error });
+            }
+        } catch(err: any) {
+             toast({ variant: 'destructive', title: 'Erro', description: "Falha ao carregar mais transações." });
+        } finally {
+            setLoadingMoreLedger(false);
+        }
+    }
 
     useEffect(() => {
-        fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [userId]);
+        fetchUserDetails();
+        fetchInitialLedger();
+    }, [fetchUserDetails, fetchInitialLedger]);
 
-    const handleRoleChange = async (newRole: UserRole | 'none') => {
+    const handleRolesChange = async (newRoles: UserRole[]) => {
         if (!user || !adminUser) return;
-        setIsSavingRole(true);
-        const result = await updateUserRole(user.id, newRole === 'none' ? null : newRole, adminUser.uid);
+        setIsSavingRoles(true);
+        const result = await updateUserRoles(user.id, newRoles, adminUser.uid);
         if (result.success) {
-            toast({ title: "Sucesso!", description: "Cargo do usuário atualizado." });
-            await fetchData();
+            toast({ title: "Sucesso!", description: "Cargos do usuário atualizados." });
+            await fetchUserDetails();
         } else {
             toast({ variant: 'destructive', title: "Erro!", description: result.error });
         }
-        setIsSavingRole(false);
+        setIsSavingRoles(false);
     };
 
-    const handleRtpSave = async () => {
+    const handleDemoProfileSave = async () => {
         if (!user || !adminUser) return;
-        setIsSavingRtp(true);
-        const rateValue = customRtp === '' ? null : parseFloat(customRtp);
-        const result = await updateUserRtp(user.id, rateValue, adminUser.uid);
+        setIsSavingDemoProfile(true);
+        const result = await updateUserDemoProfile(user.id, demoProfile, adminUser.uid);
         if (result.success) {
-            toast({ title: "Sucesso!", description: "RTP do influenciador atualizado." });
-            await fetchData();
+            toast({ title: "Sucesso!", description: "Perfil de prêmio do influenciador atualizado." });
+            await fetchUserDetails();
         } else {
             toast({ variant: 'destructive', title: "Erro!", description: result.error });
         }
-        setIsSavingRtp(false);
+        setIsSavingDemoProfile(false);
     }
     
+     const handlePostbackSave = async () => {
+        if (!user || !adminUser) return;
+        setIsSavingPostback(true);
+        const result = await updateUserPostbackUrl(user.id, postbackUrl, adminUser.uid);
+        if (result.success) {
+            toast({ title: "Sucesso!", description: "URL de Postback atualizada." });
+            await fetchUserDetails();
+        } else {
+            toast({ variant: 'destructive', title: "Erro!", description: result.error });
+        }
+        setIsSavingPostback(false);
+    }
+
     const filteredReferrals = useMemo(() => {
         if (!user) return { l1: [], l2: [], l3: [] };
         if (!debouncedReferralSearch) {
@@ -301,6 +353,8 @@ export default function UserDetailsPage() {
         );
     }
     
+    const allRoles: UserRole[] = ['admin', 'influencer', 'afiliado'];
+    
     return (
         <>
         <div className="space-y-6">
@@ -312,6 +366,9 @@ export default function UserDetailsPage() {
                     <h1 className="text-3xl font-bold">Detalhes de {user.firstName} {user.lastName}</h1>
                 </div>
                  <div className='flex items-center gap-2'>
+                    <Button variant="secondary" onClick={() => setIsEditBalanceDialogOpen(true)}>
+                        <Wallet className="mr-2 h-4 w-4" /> Editar Saldo
+                    </Button>
                     <Button variant="secondary" onClick={() => setIsEditPasswordDialogOpen(true)}>
                         <Lock className="mr-2 h-4 w-4" /> Alterar Senha
                     </Button>
@@ -420,41 +477,49 @@ export default function UserDetailsPage() {
                     <CardContent>
                          {ledgerError ? (
                             <p className="text-center text-destructive py-10">{ledgerError}</p>
-                         ) : ledger.length === 0 ? (
+                         ) : ledger.length === 0 && !loadingMoreLedger ? (
                             <p className="text-center text-muted-foreground py-10">Nenhuma movimentação encontrada.</p>
                         ) : (
-                            <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead className='w-[150px]'>Tipo</TableHead>
-                                        <TableHead>Descrição</TableHead>
-                                        <TableHead className='text-right'>Valor</TableHead>
-                                        <TableHead className='text-right'>Saldo</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {ledger.map((entry) => {
-                                        const config = ledgerTypeConfig[entry.type] || { icon: Coins, color: 'text-muted-foreground', label: entry.type };
-                                        const Icon = config.icon;
-                                        return (
-                                            <TableRow key={entry.id}>
-                                                <TableCell>
-                                                    <div className="flex items-center gap-2">
-                                                        <Icon className={cn("h-4 w-4", config.color)} />
-                                                        <span className="font-medium">{config.label}</span>
-                                                    </div>
-                                                    <span className="text-xs text-muted-foreground">{formatDate(entry.createdAt)}</span>
-                                                </TableCell>
-                                                <TableCell className="text-xs text-muted-foreground">{entry.description}</TableCell>
-                                                <TableCell className={cn("text-right font-mono", entry.amount > 0 ? 'text-green-400' : 'text-red-400')}>
-                                                    {entry.amount > 0 ? '+' : ''}{formatCurrency(entry.amount)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono">{formatCurrency(entry.balanceAfter)}</TableCell>
-                                            </TableRow>
-                                        )
-                                    })}
-                                </TableBody>
-                            </Table>
+                            <>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead className='w-[150px]'>Tipo</TableHead>
+                                            <TableHead>Descrição</TableHead>
+                                            <TableHead className='text-right'>Valor</TableHead>
+                                            <TableHead className='text-right'>Saldo</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {ledger.map((entry) => {
+                                            const config = ledgerTypeConfig[entry.type] || { icon: Coins, color: 'text-muted-foreground', label: entry.type };
+                                            const Icon = config.icon;
+                                            return (
+                                                <TableRow key={entry.id}>
+                                                    <TableCell>
+                                                        <div className="flex items-center gap-2">
+                                                            <Icon className={cn("h-4 w-4", config.color)} />
+                                                            <span className="font-medium">{config.label}</span>
+                                                        </div>
+                                                        <span className="text-xs text-muted-foreground">{formatDate(entry.createdAt)}</span>
+                                                    </TableCell>
+                                                    <TableCell className="text-xs text-muted-foreground">{entry.description}</TableCell>
+                                                    <TableCell className={cn("text-right font-mono", entry.amount > 0 ? 'text-green-400' : 'text-red-400')}>
+                                                        {entry.amount > 0 ? '+' : ''}{formatCurrency(entry.amount)}
+                                                    </TableCell>
+                                                    <TableCell className="text-right font-mono">{formatCurrency(entry.balanceAfter)}</TableCell>
+                                                </TableRow>
+                                            )
+                                        })}
+                                    </TableBody>
+                                </Table>
+                                {loadingMoreLedger && <div className="flex justify-center p-4"><LoaderCircle className="h-6 w-6 animate-spin" /></div>}
+                                {lastLedgerDocId && !loadingMoreLedger && (
+                                    <div className="mt-4 text-center">
+                                        <Button variant="outline" onClick={loadMoreLedgerEntries}>Carregar Mais</Button>
+                                    </div>
+                                )}
+                            </>
                         )}
                     </CardContent>
                 </Card>
@@ -508,39 +573,70 @@ export default function UserDetailsPage() {
                     </CardHeader>
                     <CardContent className="space-y-6">
                          <div className="space-y-2">
-                             <Label>Cargo do Usuário</Label>
-                            <Select 
-                                value={user.role || 'none'} 
-                                onValueChange={(value) => handleRoleChange(value as UserRole | 'none')}
-                                disabled={isSavingRole}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue placeholder="Selecione um cargo" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="none">Nenhum (Padrão)</SelectItem>
-                                    <SelectItem value="admin">Admin</SelectItem>
-                                    <SelectItem value="influencer">Influencer</SelectItem>
-                                </SelectContent>
-                            </Select>
-                            <p className="text-xs text-muted-foreground">Admins podem acessar o painel. Influencers podem ter RTP customizado.</p>
+                             <Label>Cargos do Usuário</Label>
+                            <div className="flex flex-col gap-2">
+                                {allRoles.map((role) => (
+                                    <div key={role} className="flex items-center space-x-2">
+                                        <Checkbox
+                                            id={`role-${role}`}
+                                            checked={user.roles?.includes(role)}
+                                            onCheckedChange={(checked) => {
+                                                const currentRoles = user.roles || [];
+                                                const newRoles = checked
+                                                    ? [...currentRoles, role]
+                                                    : currentRoles.filter((r) => r !== role);
+                                                handleRolesChange(newRoles);
+                                            }}
+                                            disabled={isSavingRoles}
+                                        />
+                                        <label
+                                            htmlFor={`role-${role}`}
+                                            className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 capitalize"
+                                        >
+                                            {role}
+                                        </label>
+                                    </div>
+                                ))}
+                            </div>
+                            <p className="text-xs text-muted-foreground">Admins e Afiliados acessam o painel. Influencers têm configurações de demonstração.</p>
                          </div>
-                         {user.role === 'influencer' && (
+                         {(user.roles?.includes('influencer')) && (
                             <div className="space-y-2 pt-4 border-t">
-                                <Label htmlFor="rtp-rate">Taxa de RTP Customizada do Influenciador (%)</Label>
+                                <Label htmlFor="demo-profile" className="flex items-center gap-2"><Award /> Perfil de Prêmio (Demo)</Label>
                                 <div className="flex gap-2">
-                                    <Input 
-                                        id="rtp-rate" 
-                                        type="number" 
-                                        placeholder="RTP Global"
-                                        value={customRtp}
-                                        onChange={(e) => setCustomRtp(e.target.value)}
-                                        disabled={isSavingRtp}
-                                    />
-                                    <Button onClick={handleRtpSave} disabled={isSavingRtp}>Salvar RTP</Button>
+                                     <Select value={demoProfile} onValueChange={(value: DemoPrizeProfile) => setDemoProfile(value)}>
+                                        <SelectTrigger id="demo-profile">
+                                            <SelectValue placeholder="Selecione um perfil" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="low">Baixo</SelectItem>
+                                            <SelectItem value="medium">Médio</SelectItem>
+                                            <SelectItem value="high">Alto</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <Button onClick={handleDemoProfileSave} disabled={isSavingDemoProfile}>Salvar Perfil</Button>
                                 </div>
                                 <p className="text-xs text-muted-foreground">
-                                    Defina uma taxa de retorno específica para este influenciador. Deixe em branco para usar o padrão global.
+                                    Define a frequência de prêmios altos para esta conta de demonstração.
+                                </p>
+                             </div>
+                         )}
+                          {(user.roles?.includes('afiliado') || user.roles?.includes('admin')) && (
+                            <div className="space-y-2 pt-4 border-t">
+                                <Label htmlFor="postback-url" className="flex items-center gap-2"><Link2/> URL de Postback S2S</Label>
+                                <div className="flex gap-2">
+                                    <Input 
+                                        id="postback-url" 
+                                        type="url" 
+                                        placeholder="https://sua-rede.com/postback?cid={cid}&sum={sum}"
+                                        value={postbackUrl}
+                                        onChange={(e) => setPostbackUrl(e.target.value)}
+                                        disabled={isSavingPostback}
+                                    />
+                                    <Button onClick={handlePostbackSave} disabled={isSavingPostback}>Salvar URL</Button>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                   Use as macros `{'{cid}'}`, `{'{sum}'}` e `{'{transaction_id}'}`.
                                 </p>
                              </div>
                          )}
@@ -581,7 +677,18 @@ export default function UserDetailsPage() {
             isOpen={isEditUserDialogOpen}
             onOpenChange={setIsEditUserDialogOpen}
             user={user}
-            onUserUpdate={fetchData}
+            onUserUpdate={fetchUserDetails}
+            adminId={adminUser.uid}
+        />}
+        
+        {user && adminUser && <EditBalanceDialog 
+            isOpen={isEditBalanceDialogOpen}
+            onOpenChange={setIsEditBalanceDialogOpen}
+            user={user}
+            onBalanceUpdate={async () => {
+                await fetchUserDetails();
+                await fetchInitialLedger();
+            }}
             adminId={adminUser.uid}
         />}
 
@@ -596,7 +703,7 @@ export default function UserDetailsPage() {
             isOpen={isEditAffiliateDialogOpen}
             onOpenChange={setIsEditAffiliateDialogOpen}
             user={user}
-            onAffiliateUpdate={fetchData}
+            onAffiliateUpdate={fetchUserDetails}
             adminId={adminUser.uid}
         />}
         
@@ -604,7 +711,7 @@ export default function UserDetailsPage() {
             isOpen={isCommissionL1DialogOpen}
             onOpenChange={setIsCommissionL1DialogOpen}
             user={user}
-            onCommissionUpdate={fetchData}
+            onCommissionUpdate={fetchUserDetails}
             adminId={adminUser.uid}
         />}
         
@@ -612,7 +719,7 @@ export default function UserDetailsPage() {
             isOpen={isCommissionL2DialogOpen}
             onOpenChange={setIsCommissionL2DialogOpen}
             user={user}
-            onCommissionUpdate={fetchData}
+            onCommissionUpdate={fetchUserDetails}
             adminId={adminUser.uid}
         />}
         
@@ -620,7 +727,7 @@ export default function UserDetailsPage() {
             isOpen={isCommissionL3DialogOpen}
             onOpenChange={setIsCommissionL3DialogOpen}
             user={user}
-            onCommissionUpdate={fetchData}
+            onCommissionUpdate={fetchUserDetails}
             adminId={adminUser.uid}
         />}
 
@@ -630,17 +737,7 @@ export default function UserDetailsPage() {
                 onOpenChange={() => setEditingCustomCommission(null)}
                 affiliate={user}
                 referredUser={editingCustomCommission}
-                onSave={fetchData}
-                adminId={adminUser.uid}
-            />
-        )}
-
-        {user && adminUser && (
-            <EditBalanceDialog
-                isOpen={isEditBalanceDialogOpen}
-                onOpenChange={setIsEditBalanceDialogOpen}
-                user={user}
-                onBalanceUpdate={fetchData}
+                onSave={fetchUserDetails}
                 adminId={adminUser.uid}
             />
         )}

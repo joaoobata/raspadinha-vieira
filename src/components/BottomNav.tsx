@@ -5,11 +5,12 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Gamepad2, Home, User, Wallet, Users2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { DepositDialog } from './DepositDialog';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { auth } from '@/lib/firebase';
+import { auth, db } from '@/lib/firebase';
 import { AuthDialog } from './AuthDialog';
+import { doc, getDoc } from 'firebase/firestore';
 
 const navItems = [
     { href: '/', label: 'Início', icon: Home },
@@ -17,15 +18,29 @@ const navItems = [
 ];
 
 const navItemsRight = [
-    { href: '/account/affiliates', label: 'Afiliados', icon: Users2 },
+    { href: '/account/affiliates', label: 'Afiliados', icon: Users2, affiliateHref: '/affiliate-panel' },
     { href: '/account', label: 'Conta', icon: User },
 ];
 
 export function BottomNav() {
     const pathname = usePathname();
     const [user] = useAuthState(auth);
+    const [userRoles, setUserRoles] = useState<string[]>([]);
     const [isDepositOpen, setIsDepositOpen] = useState(false);
     const [isAuthOpen, setIsAuthOpen] = useState(false);
+    
+    useEffect(() => {
+        if(user) {
+            const userDocRef = doc(db, 'users', user.uid);
+            const unsub = getDoc(userDocRef).then(docSnap => {
+                if(docSnap.exists()){
+                    setUserRoles(docSnap.data()?.roles || []);
+                }
+            });
+        } else {
+            setUserRoles([]);
+        }
+    }, [user]);
 
     const handleDepositClick = () => {
         if (user) {
@@ -44,6 +59,8 @@ export function BottomNav() {
             }
         }
     }
+    
+    const isAffiliate = userRoles.includes('afiliado') || userRoles.includes('admin');
 
     return (
         <>
@@ -69,15 +86,18 @@ export function BottomNav() {
                     </button>
                 </div>
                 
-                {navItemsRight.map(item => (
-                    <Link key={item.href} href={item.href} className={cn(
-                        "flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors h-full",
-                        pathname.startsWith(item.href) && item.href !== '/' && "text-primary"
-                    )}>
-                        <item.icon className="h-6 w-6" />
-                        <span className="text-xs font-medium">{item.label}</span>
-                    </Link>
-                ))}
+                {navItemsRight.map(item => {
+                    const href = isAffiliate && item.affiliateHref ? item.affiliateHref : item.href;
+                    return (
+                        <Link key={item.label} href={href} className={cn(
+                            "flex flex-col items-center justify-center gap-1 text-muted-foreground transition-colors h-full",
+                            pathname.startsWith(href) && href !== '/' && "text-primary"
+                        )}>
+                            <item.icon className="h-6 w-6" />
+                            <span className="text-xs font-medium">{item.label}</span>
+                        </Link>
+                    )
+                })}
             </div>
         </div>
         {user ? (
@@ -88,4 +108,3 @@ export function BottomNav() {
         </>
     );
 }
-

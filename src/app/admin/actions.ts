@@ -27,6 +27,14 @@ interface DashboardStats {
     dailyData: DailyData[];
 }
 
+// Type definition for the objects we'll store
+interface TransactionToProcess {
+    id: string;
+    userId: string;
+    amount: number;
+}
+
+
 export async function getDashboardStats(dateRange?: DateRange): Promise<{ success: boolean; data?: DashboardStats; error?: string }> {
     try {
         const adminDb = getAdminDb();
@@ -140,7 +148,7 @@ export async function reprocessMissingCommissions(adminId: string): Promise<{ su
         console.log(`Found ${transactionsSnapshot.size} completed transactions and ${paidTransactionIds.size} paid commissions.`);
 
         // --- PROCESSING PHASE ---
-        const transactionsToProcess = [];
+        const transactionsToProcess: TransactionToProcess[] = [];
         
         // 3. Iterate through transactions to find which ones are missing a commission record.
         for (const doc of transactionsSnapshot.docs) {

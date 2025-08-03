@@ -2,7 +2,7 @@
 'use server';
 
 import { getAdminDb } from "@/lib/firebase-admin-init";
-import { Timestamp } from "firebase-admin/firestore";
+import { FieldPath, Timestamp } from "firebase-admin/firestore";
 
 // Helper function to safely convert a Timestamp to an ISO string
 const toISOStringOrNull = (timestamp: Timestamp | undefined): string | null => {
@@ -27,26 +27,47 @@ export interface CommissionLog {
     createdAt: string | null;
 }
 
+
+async function fetchUsersInBatches(adminDb: FirebaseFirestore.Firestore, userIds: string[]): Promise<Map<string, string>> {
+    const userNamesMap = new Map<string, string>();
+    if (userIds.length === 0) {
+        return userNamesMap;
+    }
+
+    // Firestore 'in' query supports a maximum of 30 elements in the array.
+    const batchSize = 30;
+    for (let i = 0; i < userIds.length; i += batchSize) {
+        const batchIds = userIds.slice(i, i + batchSize);
+        if (batchIds.length > 0) {
+            const usersSnapshot = await adminDb.collection("users").where(FieldPath.documentId(), 'in', batchIds).get();
+            usersSnapshot.docs.forEach(doc => {
+                const data = doc.data();
+                const name = `${data.firstName} ${data.lastName}`.trim() || data.email || 'Usuário Desconhecido';
+                userNamesMap.set(doc.id, name);
+            });
+        }
+    }
+    return userNamesMap;
+}
+
 export async function getCommissionLogs(): Promise<{ success: boolean; data?: CommissionLog[]; error?: string }> {
     try {
         const adminDb = getAdminDb();
-        // Fetch commissions and users in parallel
-        const [commissionsSnapshot, usersSnapshot] = await Promise.all([
-            adminDb.collection("commissions").orderBy("createdAt", "desc").limit(500).get(),
-            adminDb.collection("users").get()
-        ]);
-
+        const commissionsSnapshot = await adminDb.collection("commissions").orderBy("createdAt", "desc").limit(500).get();
+        
         if (commissionsSnapshot.empty) {
             return { success: true, data: [] };
         }
-
-        // Create a map of user IDs to their names for efficient lookup
-        const userNamesMap = new Map<string, string>();
-        usersSnapshot.docs.forEach(doc => {
+        
+        const userIdsSet = new Set<string>();
+        commissionsSnapshot.docs.forEach(doc => {
             const data = doc.data();
-            const name = `${data.firstName} ${data.lastName}`.trim() || data.email;
-            userNamesMap.set(doc.id, name);
+            userIdsSet.add(data.affiliateId);
+            userIdsSet.add(data.referredUserId);
         });
+
+        const userIds = Array.from(userIdsSet);
+        const userNamesMap = await fetchUsersInBatches(adminDb, userIds);
 
         const commissionLogs = commissionsSnapshot.docs.map(doc => {
             const data = doc.data();

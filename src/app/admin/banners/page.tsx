@@ -1,5 +1,6 @@
 
 'use client';
+// HMR fix
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { useToast } from '@/hooks/use-toast';
 import { getBanners, saveSingleBanner, saveHomeBanners, BannersData } from './actions';
 import { Skeleton } from '@/components/ui/skeleton';
-import { LoaderCircle, Link as LinkIcon, PlusCircle, Trash2, Upload } from 'lucide-react';
+import { LoaderCircle, Link as LinkIcon, PlusCircle, Trash2, Upload, Image as ImageIcon } from 'lucide-react';
 import Image from 'next/image';
 import { v4 as uuidv4 } from 'uuid';
 import { Separator } from '@/components/ui/separator';

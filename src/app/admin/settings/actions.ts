@@ -18,15 +18,15 @@ export interface SettingsData {
     colorPrimary?: string;
     colorBackground?: string;
     colorAccent?: string;
+    customHeadScript?: string; // New field for custom script
+    soundWinUrl?: string;
+    soundLoseUrl?: string;
+    soundScratchUrl?: string;
 }
 
-async function uploadLogoAndGetURL(fileBuffer: Buffer, fileName: string, mimeType: string): Promise<string> {
-    const bucketName = process.env.FIREBASE_STORAGE_BUCKET;
-    if (!bucketName) {
-        throw new Error("Firebase Storage bucket name is not configured in environment variables.");
-    }
-    const bucket = getAdminStorage().bucket(bucketName);
-    const file = bucket.file(`logos/${fileName}`);
+async function uploadFileAndGetURL(fileBuffer: Buffer, fileName: string, mimeType: string, folder: 'logos' | 'sounds'): Promise<string> {
+    const bucket = getAdminStorage().bucket(); // Use the default bucket configured in firebase-admin-init
+    const file = bucket.file(`${folder}/${fileName}`);
 
     await file.save(fileBuffer, {
         metadata: { contentType: mimeType },
@@ -56,6 +56,10 @@ export const getSettings = cache(async (): Promise<{ success: boolean; data?: Se
                 colorPrimary: '142.1 76.2% 41.2%',
                 colorBackground: '240 10% 3.9%',
                 colorAccent: '142.1 76.2% 41.2%',
+                customHeadScript: '',
+                soundWinUrl: '',
+                soundLoseUrl: '',
+                soundScratchUrl: '',
             } };
         }
         const data = doc.data() as SettingsData;
@@ -68,6 +72,11 @@ export const getSettings = cache(async (): Promise<{ success: boolean; data?: Se
         if (data.colorPrimary === undefined) data.colorPrimary = '142.1 76.2% 41.2%';
         if (data.colorBackground === undefined) data.colorBackground = '240 10% 3.9%';
         if (data.colorAccent === undefined) data.colorAccent = '142.1 76.2% 41.2%';
+        if (data.customHeadScript === undefined) data.customHeadScript = '';
+        if (data.soundWinUrl === undefined) data.soundWinUrl = '';
+        if (data.soundLoseUrl === undefined) data.soundLoseUrl = '';
+        if (data.soundScratchUrl === undefined) data.soundScratchUrl = '';
+
 
         return { success: true, data };
     } catch (error: any) {
@@ -76,7 +85,14 @@ export const getSettings = cache(async (): Promise<{ success: boolean; data?: Se
     }
 });
 
-export async function saveSettings(data: SettingsData, adminId: string, logoFileDataUrl?: string): Promise<{ success: boolean; error?: string }> {
+export async function saveSettings(
+    data: SettingsData, 
+    adminId: string, 
+    logoFileDataUrl?: string,
+    soundWinFileDataUrl?: string,
+    soundLoseFileDataUrl?: string,
+    soundScratchFileDataUrl?: string
+): Promise<{ success: boolean; error?: string }> {
     try {
         await logAdminAction(adminId, adminId, 'UPDATE_SETTINGS', { status: 'STARTED' }, 'INFO');
         // Basic validation
@@ -100,18 +116,46 @@ export async function saveSettings(data: SettingsData, adminId: string, logoFile
         const settingsRef = adminDb.collection('settings').doc('general');
         
         const dataToSave: SettingsData = { ...data };
+        const currentSettings = await getSettings();
 
         if (logoFileDataUrl) {
             const [metadata, base64Data] = logoFileDataUrl.split(',');
             const mimeType = metadata.split(':')[1].split(';')[0];
             const fileBuffer = Buffer.from(base64Data, 'base64');
             const fileName = `logo-${Date.now()}`;
-            const newLogoUrl = await uploadLogoAndGetURL(fileBuffer, fileName, mimeType);
-            dataToSave.logoUrl = newLogoUrl;
+            dataToSave.logoUrl = await uploadFileAndGetURL(fileBuffer, fileName, mimeType, 'logos');
         } else {
-            // If no new file is uploaded, keep the existing URL from the fetched settings
-            const currentSettings = await getSettings();
             dataToSave.logoUrl = currentSettings.data?.logoUrl || '';
+        }
+
+        if (soundWinFileDataUrl) {
+            const [metadata, base64Data] = soundWinFileDataUrl.split(',');
+            const mimeType = metadata.split(':')[1].split(';')[0];
+            const fileBuffer = Buffer.from(base64Data, 'base64');
+            const fileName = `sound-win-${Date.now()}`;
+            dataToSave.soundWinUrl = await uploadFileAndGetURL(fileBuffer, fileName, mimeType, 'sounds');
+        } else {
+             dataToSave.soundWinUrl = currentSettings.data?.soundWinUrl || '';
+        }
+
+        if (soundLoseFileDataUrl) {
+            const [metadata, base64Data] = soundLoseFileDataUrl.split(',');
+            const mimeType = metadata.split(':')[1].split(';')[0];
+            const fileBuffer = Buffer.from(base64Data, 'base64');
+            const fileName = `sound-lose-${Date.now()}`;
+            dataToSave.soundLoseUrl = await uploadFileAndGetURL(fileBuffer, fileName, mimeType, 'sounds');
+        } else {
+            dataToSave.soundLoseUrl = currentSettings.data?.soundLoseUrl || '';
+        }
+
+        if (soundScratchFileDataUrl) {
+            const [metadata, base64Data] = soundScratchFileDataUrl.split(',');
+            const mimeType = metadata.split(':')[1].split(';')[0];
+            const fileBuffer = Buffer.from(base64Data, 'base64');
+            const fileName = `sound-scratch-${Date.now()}`;
+            dataToSave.soundScratchUrl = await uploadFileAndGetURL(fileBuffer, fileName, mimeType, 'sounds');
+        } else {
+            dataToSave.soundScratchUrl = currentSettings.data?.soundScratchUrl || '';
         }
 
         await settingsRef.set(dataToSave, { merge: true });

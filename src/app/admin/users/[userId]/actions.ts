@@ -4,6 +4,7 @@
 import { getAdminAuth, getAdminDb } from "@/lib/firebase-admin-init";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { logAdminAction } from "@/lib/logging";
+import { DemoPrizeProfile } from "../../influencers/actions";
 
 // Helper to safely convert Timestamps
 const toISOStringOrNull = (timestamp: Timestamp | undefined): string | null => {
@@ -19,21 +20,18 @@ async function verifyAdmin(adminId: string): Promise<void> {
         throw new Error("Admin não autenticado.");
     }
     const adminDb = getAdminDb();
-    const adminAuth = getAdminAuth();
-    
-    // Get user from Auth to check email
-    const adminUserAuth = await adminAuth.getUser(adminId);
-    if (adminUserAuth.email === 'joaovictorobata2005@gmail.com') {
-        return; // Grant access based on email
-    }
-
     const adminUserDoc = await adminDb.collection('users').doc(adminId).get();
-    if (!adminUserDoc.exists || adminUserDoc.data()?.role !== 'admin') {
-        throw new Error("Acesso negado. Apenas administradores podem realizar esta ação.");
+    if (!adminUserDoc.exists) {
+        throw new Error("Usuário administrador não encontrado.");
+    }
+    const adminData = adminUserDoc.data();
+    if (!adminData?.roles || !adminData.roles.includes('admin')) {
+         throw new Error("Acesso negado. Apenas administradores podem realizar esta ação.");
     }
 }
 
-export type UserRole = 'admin' | 'influencer';
+
+export type UserRole = 'admin' | 'influencer' | 'afiliado';
 
 export interface DirectReferral {
     id: string;
@@ -69,11 +67,12 @@ export interface UserDetailsData {
     commissionRateL2?: number; // The L2 rate this user EARNS (percentage, e.g., 1 for 1%)
     commissionRateL3?: number; // The L3 rate this user EARNS (percentage, e.g., 0.5 for 0.5%)
 
-    role?: UserRole | null;
-    rtpRate?: number | null; // User-specific RTP
+    roles?: UserRole[];
+    demoPrizeProfile?: DemoPrizeProfile;
     directReferrals: DirectReferral[];
     level2Referrals: DirectReferral[];
     level3Referrals: DirectReferral[];
+    postbackUrl?: string;
 }
 
 export type LedgerEntryType = 
@@ -98,6 +97,28 @@ export interface LedgerEntry {
     refId: string; // ID of the related document (transaction, game_play, etc.)
 }
 
+// Helper to fetch transactions in batches to avoid Firestore's 30-item 'in' query limit
+async function fetchTransactionsInBatches(adminDb: FirebaseFirestore.Firestore, userIds: string[]): Promise<FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[]> {
+    if (userIds.length === 0) {
+        return [];
+    }
+
+    const allTransactions: FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[] = [];
+    const batchSize = 30;
+
+    for (let i = 0; i < userIds.length; i += batchSize) {
+        const batchIds = userIds.slice(i, i + batchSize);
+        if (batchIds.length > 0) {
+            const snapshot = await adminDb.collection('transactions')
+                .where('userId', 'in', batchIds)
+                .where('status', '==', 'COMPLETED')
+                .get();
+            allTransactions.push(...snapshot.docs);
+        }
+    }
+    return allTransactions;
+}
+
 
 // Action to get user details and aggregated data
 export async function getUserDetails(userId: string): Promise<{ success: boolean; data?: UserDetailsData; error?: string }> {
@@ -108,54 +129,97 @@ export async function getUserDetails(userId: string): Promise<{ success: boolean
 
         const adminDb = getAdminDb();
         const userRef = adminDb.collection("users").doc(userId);
-        const userDoc = await userRef.get();
-
+        
+        // --- Parallel Data Fetching ---
+        const [userDoc, allUsersSnapshot] = await Promise.all([
+            userRef.get(),
+            adminDb.collection("users").get()
+        ]);
+        
         if (!userDoc.exists) {
             return { success: false, error: "Usuário não encontrado." };
         }
-
-        const userData = userDoc.data()!;
         
-        // Use a map for faster deposit lookups
+        const userData = userDoc.data()!;
+        const allUsersMap = new Map(allUsersSnapshot.docs.map(doc => [doc.id, {id: doc.id, ...doc.data()} as FirebaseFirestore.DocumentData]));
+
+        const l1ReferralDocs: FirebaseFirestore.DocumentData[] = [];
+        const l2ReferralDocs: FirebaseFirestore.DocumentData[] = [];
+        const l3ReferralDocs: FirebaseFirestore.DocumentData[] = [];
+        
+        const l1Ids: string[] = [];
+        const l2Ids: string[] = [];
+
+        allUsersSnapshot.forEach(doc => {
+            const data = doc.data();
+            if(data.referredBy === userId) {
+                l1ReferralDocs.push({id: doc.id, ...data});
+                l1Ids.push(doc.id);
+            }
+        });
+
+        if (l1Ids.length > 0) {
+            allUsersSnapshot.forEach(doc => {
+                const data = doc.data();
+                if(l1Ids.includes(data.referredBy)) {
+                    l2ReferralDocs.push({id: doc.id, ...data});
+                    l2Ids.push(doc.id);
+                }
+            });
+        }
+        
+        if (l2Ids.length > 0) {
+            allUsersSnapshot.forEach(doc => {
+                const data = doc.data();
+                if(l2Ids.includes(data.referredBy)) {
+                    l3ReferralDocs.push({id: doc.id, ...data});
+                }
+            });
+        }
+        
+        const allReferralIds = [
+            userId,
+            ...l1ReferralDocs.map(d => d.id),
+            ...l2ReferralDocs.map(d => d.id),
+            ...l3ReferralDocs.map(d => d.id),
+        ];
+        
+        // Fetch only relevant transactions and commissions
+        const [transactionsDocs, commissionsSnapshot, withdrawalsSnapshot] = await Promise.all([
+             fetchTransactionsInBatches(adminDb, allReferralIds),
+             adminDb.collection('commissions').where('affiliateId', '==', userId).get(),
+             adminDb.collection("withdrawals").where("userId", "==", userId).where("status", "==", "COMPLETED").get()
+        ]);
+
         const depositsByUserId = new Map<string, number>();
-        const allTransactionsSnapshot = await adminDb.collection("transactions").where("status", "==", "COMPLETED").get();
-        allTransactionsSnapshot.forEach(doc => {
+        transactionsDocs.forEach(doc => {
             const data = doc.data();
             depositsByUserId.set(data.userId, (depositsByUserId.get(data.userId) || 0) + data.amount);
         });
+
+        const commissionByReferredId = new Map<string, number>();
+        commissionsSnapshot.forEach(doc => {
+            const data = doc.data();
+            commissionByReferredId.set(data.referredUserId, (commissionByReferredId.get(data.referredUserId) || 0) + data.commissionEarned);
+        });
         
         const totalDeposited = depositsByUserId.get(userId) || 0;
-        
-        const withdrawalsSnapshot = await adminDb.collection("withdrawals").where("userId", "==", userId).where("status", "==", "COMPLETED").get();
         const totalWithdrawn = withdrawalsSnapshot.docs.reduce((sum, doc) => sum + doc.data().amount, 0);
 
-        const allUsersSnapshot = await adminDb.collection("users").get();
-        const allUsersMap = new Map(allUsersSnapshot.docs.map(doc => [doc.id, doc.data()]));
-
-        const processReferrals = (referralDocs: FirebaseFirestore.QueryDocumentSnapshot[], level: 1 | 2 | 3): DirectReferral[] => {
-            return referralDocs.map(doc => {
-                const refData = doc.data();
-                const customRates = level === 1 ? (userData.customCommissionRates || {}) : {};
+        const processReferrals = (referralDocs: FirebaseFirestore.DocumentData[]): DirectReferral[] => {
+            return referralDocs.map(refData => {
+                const customRates = userData.customCommissionRates || {};
                 
-                // Note: Commission generated is not calculated per level here, can be added later if needed.
                 return {
-                    id: doc.id,
+                    id: refData.id,
                     name: `${refData.firstName || ''} ${refData.lastName || ''}`.trim() || refData.email,
                     email: refData.email,
-                    totalDeposited: depositsByUserId.get(doc.id) || 0,
-                    commissionGenerated: 0, // Placeholder
-                    customRate: customRates[doc.id]
+                    totalDeposited: depositsByUserId.get(refData.id) || 0,
+                    commissionGenerated: commissionByReferredId.get(refData.id) || 0,
+                    customRate: customRates[refData.id]
                 };
             }).sort((a,b) => b.totalDeposited - a.totalDeposited);
         };
-
-        const level1Docs = allUsersSnapshot.docs.filter(doc => doc.data().referredBy === userId);
-        const level1Ids = level1Docs.map(doc => doc.id);
-        
-        const level2Docs = level1Ids.length > 0 ? allUsersSnapshot.docs.filter(doc => level1Ids.includes(doc.data().referredBy)) : [];
-        const level2Ids = level2Docs.map(doc => doc.id);
-
-        const level3Docs = level2Ids.length > 0 ? allUsersSnapshot.docs.filter(doc => level2Ids.includes(doc.data().referredBy)) : [];
 
         const details: UserDetailsData = {
             id: userDoc.id,
@@ -175,11 +239,12 @@ export async function getUserDetails(userId: string): Promise<{ success: boolean
             commissionRate: userData.commissionRate,
             commissionRateL2: userData.commissionRateL2,
             commissionRateL3: userData.commissionRateL3,
-            role: userData.role || null,
-            rtpRate: userData.rtpRate || null,
-            directReferrals: processReferrals(level1Docs, 1),
-            level2Referrals: processReferrals(level2Docs, 2),
-            level3Referrals: processReferrals(level3Docs, 3),
+            roles: userData.roles || [],
+            demoPrizeProfile: userData.demoPrizeProfile || 'medium',
+            directReferrals: processReferrals(l1ReferralDocs),
+            level2Referrals: processReferrals(l2ReferralDocs),
+            level3Referrals: processReferrals(l3ReferralDocs),
+            postbackUrl: userData.postbackUrl,
         };
 
         if (details.referredBy) {
@@ -200,23 +265,44 @@ export async function getUserDetails(userId: string): Promise<{ success: boolean
 }
 
 
-// Action to get user's ledger history
-export async function getUserLedger(userId: string): Promise<{ success: boolean; data?: LedgerEntry[]; error?: string }> {
+export interface PaginatedLedgerResponse {
+    entries: LedgerEntry[];
+    lastDocId: string | null;
+}
+
+// Action to get user's ledger history with pagination
+export async function getUserLedger(
+    userId: string,
+    startAfterDocId?: string
+): Promise<{ success: boolean; data?: PaginatedLedgerResponse; error?: string }> {
     try {
         if (!userId) {
             return { success: false, error: "ID do usuário não fornecido." };
         }
 
         const adminDb = getAdminDb();
-        // Removed orderBy to prevent index errors. Sorting is done in-code below.
-        const ledgerRef = adminDb.collection('user_ledger').where('userId', '==', userId).limit(50);
-        const snapshot = await ledgerRef.get();
-        
-        if(snapshot.empty) {
-            return { success: true, data: [] };
+        const ledgerCollection = adminDb.collection('user_ledger');
+        const pageSize = 20;
+
+        let query = ledgerCollection
+            .where('userId', '==', userId)
+            .orderBy('createdAt', 'desc')
+            .limit(pageSize);
+
+        if (startAfterDocId) {
+            const startAfterDoc = await ledgerCollection.doc(startAfterDocId).get();
+            if (startAfterDoc.exists) {
+                query = query.startAfter(startAfterDoc);
+            }
         }
         
-        const ledgerEntries = snapshot.docs.map(doc => {
+        const snapshot = await query.get();
+        
+        if (snapshot.empty) {
+            return { success: true, data: { entries: [], lastDocId: null } };
+        }
+        
+        const entries = snapshot.docs.map(doc => {
             const data = doc.data();
             return {
                 id: doc.id,
@@ -225,15 +311,10 @@ export async function getUserLedger(userId: string): Promise<{ success: boolean;
             } as LedgerEntry;
         });
         
-        // Manual sort to ensure most recent items are first
-        ledgerEntries.sort((a, b) => {
-            if (a.createdAt && b.createdAt) {
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-            }
-            return 0;
-        });
+        const lastVisibleDoc = snapshot.docs[snapshot.docs.length - 1];
+        const lastDocId = snapshot.size < pageSize ? null : lastVisibleDoc.id;
 
-        return { success: true, data: ledgerEntries };
+        return { success: true, data: { entries, lastDocId } };
 
     } catch (error: any) {
         console.error(`Error fetching ledger for user ${userId}:`, error);
@@ -330,7 +411,7 @@ export async function updateUserCommissionRate(userId: string, newRate: number, 
     } catch (error: any) {
         console.error(`Error updating commission rate for user ${userId}:`, error);
         await logAdminAction(adminId, userId, 'UPDATE_USER_COMMISSION_L1', { error: error.message }, 'ERROR');
-        return { success: false, error: "Falha ao atualizar a taxa de comissão." };
+        return { success: false, error: error.message || "Falha ao atualizar a taxa de comissão." };
     }
 }
 
@@ -423,53 +504,71 @@ export async function updateUserCommissionRateL3(userId: string, newRate: number
     }
 }
 
-export async function updateUserRole(userId: string, role: UserRole | null, adminId: string): Promise<{ success: boolean; error?: string }> {
+export async function updateUserRoles(userId: string, roles: UserRole[], adminId: string): Promise<{ success: boolean; error?: string }> {
     try {
-        const adminAuth = getAdminAuth();
-        const adminUser = await adminAuth.getUser(adminId);
-
-        // Check if the user is the hardcoded super admin OR has the admin role in the DB
-        if (adminUser.email !== 'joaovictorobata2005@gmail.com') {
-             await verifyAdmin(adminId);
-        }
-
+        await verifyAdmin(adminId);
         if (!userId) {
             return { success: false, error: "ID do usuário não fornecido." };
         }
+        
+        const validRoles: UserRole[] = ['admin', 'influencer', 'afiliado'];
+        const newRoles = roles.filter(role => validRoles.includes(role));
 
         const adminDb = getAdminDb();
         const userRef = adminDb.collection("users").doc(userId);
-        await userRef.update({ role: role || FieldValue.delete() });
         
-        await logAdminAction(adminId, userId, 'UPDATE_USER_ROLE', { newRole: role }, 'SUCCESS');
+        await userRef.update({ roles: newRoles });
+        
+        await logAdminAction(adminId, userId, 'UPDATE_USER_ROLES', { newRoles }, 'SUCCESS');
         return { success: true };
     } catch (error: any) {
-        console.error(`Error updating role for user ${userId}:`, error);
-        await logAdminAction(adminId, userId, 'UPDATE_USER_ROLE', { error: error.message }, 'ERROR');
-        return { success: false, error: error.message || "Falha ao atualizar o cargo do usuário." };
+        console.error(`Error updating roles for user ${userId}:`, error);
+        await logAdminAction(adminId, userId, 'UPDATE_USER_ROLES', { error: error.message, stack: error.stack }, 'ERROR');
+        return { success: false, error: "Falha ao atualizar cargos do usuário." };
     }
 }
 
-export async function updateUserRtp(userId: string, rtpRate: number | null, adminId: string): Promise<{ success: boolean; error?: string }> {
+export async function updateUserDemoProfile(userId: string, profile: DemoPrizeProfile | null, adminId: string): Promise<{ success: boolean; error?: string }> {
     try {
         await verifyAdmin(adminId); // Security Check
         if (!userId) {
             return { success: false, error: "ID do usuário não fornecido." };
         }
-        if (rtpRate !== null && (typeof rtpRate !== 'number' || rtpRate < 0 || rtpRate > 100)) {
-            return { success: false, error: "A taxa de RTP deve ser um número entre 0 e 100." };
+        if (profile !== null && !['low', 'medium', 'high'].includes(profile)) {
+            return { success: false, error: "Perfil de prêmio inválido." };
         }
 
         const adminDb = getAdminDb();
         const userRef = adminDb.collection("users").doc(userId);
-        await userRef.update({ rtpRate: rtpRate === null ? FieldValue.delete() : rtpRate });
+        // Use delete() to remove the field if null is passed, otherwise set it.
+        await userRef.update({ demoPrizeProfile: profile === null ? FieldValue.delete() : profile });
         
-        await logAdminAction(adminId, userId, 'UPDATE_INFLUENCER_RTP', { newRtp: rtpRate }, 'SUCCESS');
+        await logAdminAction(adminId, userId, 'UPDATE_INFLUENCER_DEMO_PROFILE', { newProfile: profile }, 'SUCCESS');
         return { success: true };
     } catch (error: any) {
-        console.error(`Error updating RTP for user ${userId}:`, error);
-        await logAdminAction(adminId, userId, 'UPDATE_INFLUENCER_RTP', { error: error.message }, 'ERROR');
-        return { success: false, error: error.message || "Falha ao atualizar o RTP do usuário." };
+        console.error(`Error updating demo profile for user ${userId}:`, error);
+        await logAdminAction(adminId, userId, 'UPDATE_INFLUENCER_DEMO_PROFILE', { error: error.message }, 'ERROR');
+        return { success: false, error: error.message || "Falha ao atualizar o perfil de prêmio do usuário." };
+    }
+}
+
+export async function updateUserPostbackUrl(userId: string, postbackUrl: string | null, adminId: string): Promise<{ success: boolean, error?: string }> {
+    try {
+        await verifyAdmin(adminId);
+        if (!userId) throw new Error("ID do usuário não fornecido.");
+
+        const adminDb = getAdminDb();
+        const userRef = adminDb.collection('users').doc(userId);
+
+        const urlToSave = postbackUrl && postbackUrl.trim() !== '' ? postbackUrl.trim() : FieldValue.delete();
+        await userRef.update({ postbackUrl: urlToSave });
+
+        await logAdminAction(adminId, userId, 'UPDATE_POSTBACK_URL', { newUrl: urlToSave === FieldValue.delete() ? null : urlToSave }, 'SUCCESS');
+        return { success: true };
+    } catch (error: any) {
+        console.error(`Error updating postback URL for user ${userId}:`, error);
+        await logAdminAction(adminId, userId, 'UPDATE_POSTBACK_URL', { error: error.message }, 'ERROR');
+        return { success: false, error: error.message || "Falha ao atualizar a URL de postback." };
     }
 }
 
@@ -526,7 +625,52 @@ export async function updateUserAffiliate(userId: string, newAffiliateId: string
     }
 }
 
+export async function searchUsers(searchTerm: string): Promise<{ success: boolean; data?: UserDetailsData[]; error?: string }> {
+    if (!searchTerm || searchTerm.length < 2) {
+        return { success: true, data: [] };
+    }
+    try {
+        const adminDb = getAdminDb();
+        const lowerCaseSearchTerm = searchTerm.toLowerCase();
 
-    
+        // This is a very basic search. For production, consider a dedicated search service like Algolia or Typesense.
+        const usersSnapshot = await adminDb.collection('users').get();
+        const filteredUsers: UserDetailsData[] = [];
+        
+        usersSnapshot.forEach(doc => {
+            const data = doc.data();
+            const name = `${data.firstName || ''} ${data.lastName || ''}`.toLowerCase();
+            const email = (data.email || '').toLowerCase();
+
+            if (name.includes(lowerCaseSearchTerm) || email.includes(lowerCaseSearchTerm)) {
+                filteredUsers.push({
+                    id: doc.id,
+                    firstName: data.firstName || '',
+                    lastName: data.lastName || '',
+                    email: data.email || '',
+                    phone: data.phone || '',
+                    cpf: data.cpf || '',
+                    balance: data.balance || 0,
+                    commissionBalance: data.commissionBalance || 0,
+                    status: data.status || 'active',
+                    createdAt: toISOStringOrNull(data.createdAt),
+                    totalDeposited: 0, // Not needed for search result
+                    totalWithdrawn: 0, // Not needed for search result
+                    referredBy: data.referredBy || null,
+                    directReferrals: [],
+                    level2Referrals: [],
+                    level3Referrals: [],
+                    referredByName: ''
+                });
+            }
+        });
+        
+        return { success: true, data: filteredUsers.slice(0, 10) }; // Limit to 10 results
+
+    } catch (error: any) {
+        console.error("Error searching users: ", error);
+        return { success: false, error: "Falha ao buscar usuários." };
+    }
+}
 
     

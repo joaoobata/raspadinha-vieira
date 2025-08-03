@@ -1,5 +1,3 @@
-
-// HMR fix
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -23,23 +21,22 @@ export default function AdminTrackingPage() {
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
+        const fetchSettings = async () => {
+            setLoading(true);
+            const result = await getTrackingSettings();
+            if (result.success && result.data) {
+                setSettings(result.data);
+            } else {
+                toast({
+                    variant: 'destructive',
+                    title: 'Erro ao Carregar',
+                    description: result.error || 'Não foi possível carregar as configurações de rastreamento.',
+                });
+            }
+            setLoading(false);
+        };
         fetchSettings();
-    }, []);
-
-    const fetchSettings = async () => {
-        setLoading(true);
-        const result = await getTrackingSettings();
-        if (result.success && result.data) {
-            setSettings(result.data);
-        } else {
-            toast({
-                variant: 'destructive',
-                title: 'Erro ao Carregar',
-                description: result.error || 'Não foi possível carregar as configurações de rastreamento.',
-            });
-        }
-        setLoading(false);
-    };
+    }, [toast]);
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value } = e.target;
@@ -73,6 +70,7 @@ export default function AdminTrackingPage() {
             <div className="space-y-8">
                 <Skeleton className="h-10 w-1/3" />
                 <Skeleton className="h-64 w-full" />
+                <Skeleton className="h-48 w-full" />
                 <Skeleton className="h-48 w-full" />
             </div>
         )
@@ -119,6 +117,66 @@ export default function AdminTrackingPage() {
                     </div>
                 </CardContent>
             </Card>
+
+             <Card>
+                <CardHeader>
+                    <CardTitle>TikTok Ads</CardTitle>
+                     <CardDescription>
+                        Insira as informações do seu Pixel do TikTok e o Token de Acesso da Events API.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    <div className="space-y-2">
+                        <Label htmlFor="tiktokPixelId">ID do Pixel do TikTok</Label>
+                        <Input
+                            id="tiktokPixelId"
+                            name="tiktokPixelId"
+                            value={settings.tiktokPixelId || ''}
+                            onChange={handleInputChange}
+                            placeholder="Ex: C123ABCD456E7F89GHIJ"
+                        />
+                         <p className="text-xs text-muted-foreground">
+                            Encontrado em Ativos &gt; Eventos no seu painel do TikTok Ads Manager.
+                        </p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="tiktokAccessToken">Token de Acesso da Events API</Label>
+                        <Input
+                            id="tiktokAccessToken"
+                            name="tiktokAccessToken"
+                            type="password"
+                            value={settings.tiktokAccessToken || ''}
+                            onChange={handleInputChange}
+                            placeholder="Cole seu token de acesso gerado nas configurações do pixel"
+                        />
+                    </div>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>Kwai for Business</CardTitle>
+                     <CardDescription>
+                        Insira o ID do seu Pixel do Kwai para rastreamento de eventos server-side.
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    <div className="space-y-2">
+                        <Label htmlFor="kwaiPixelId">ID do Pixel do Kwai</Label>
+                        <Input
+                            id="kwaiPixelId"
+                            name="kwaiPixelId"
+                            value={settings.kwaiPixelId || ''}
+                            onChange={handleInputChange}
+                            placeholder="Ex: KFP-12345-6789-abcdef"
+                        />
+                         <p className="text-xs text-muted-foreground">
+                           Encontrado em Ativos > Pixel no seu painel do Kwai for Business.
+                        </p>
+                    </div>
+                </CardContent>
+            </Card>
+
 
             <Card>
                 <CardHeader>

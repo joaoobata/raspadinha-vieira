@@ -8,11 +8,11 @@ import { auth } from '@/lib/firebase';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getAccountStats, claimCommissionBalance } from './actions';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Copy, Users, Gift, LoaderCircle, Search } from 'lucide-react';
+import { Copy, Users, Gift, LoaderCircle, DollarSign, ChevronDown } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Input } from '@/components/ui/input';
 
 interface ReferralDetails {
     id: string;
@@ -47,6 +47,12 @@ interface AffiliateStats {
     },
 }
 
+type VisibleCounts = {
+    level1: number;
+    level2: number;
+    level3: number;
+};
+
 export default function AffiliatesPage() {
     const [user] = useAuthState(auth);
     const { toast } = useToast();
@@ -54,7 +60,11 @@ export default function AffiliatesPage() {
     const [loading, setLoading] = useState(true);
     const [claiming, setClaiming] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [searchTerm, setSearchTerm] = useState('');
+    const [visibleCounts, setVisibleCounts] = useState<VisibleCounts>({
+        level1: 10,
+        level2: 10,
+        level3: 10,
+    });
 
     const fetchAffiliateData = useCallback(async () => {
         if (user) {
@@ -62,7 +72,6 @@ export default function AffiliatesPage() {
             const statsResult = await getAccountStats(user.uid);
 
             if (statsResult.success && statsResult.data) {
-                // We only need a subset of the data for this page
                 const { referralLink, commissionBalance, commissionPlan, level1, level2, level3 } = statsResult.data;
                 setStats({ referralLink, commissionBalance, commissionPlan, level1, level2, level3 });
             } else {
@@ -71,6 +80,14 @@ export default function AffiliatesPage() {
             setLoading(false);
         }
     }, [user]);
+
+    const totalNetworkDeposits = useMemo(() => {
+        if (!stats) return 0;
+        const l1Deposits = stats.level1.referrals.reduce((sum, r) => sum + r.totalDeposited, 0);
+        const l2Deposits = stats.level2.referrals.reduce((sum, r) => sum + r.totalDeposited, 0);
+        const l3Deposits = stats.level3.referrals.reduce((sum, r) => sum + r.totalDeposited, 0);
+        return l1Deposits + l2Deposits + l3Deposits;
+    }, [stats]);
     
     useEffect(() => {
         if(user) {
@@ -78,27 +95,6 @@ export default function AffiliatesPage() {
         }
     }, [user, fetchAffiliateData]);
 
-    const filteredReferrals = useMemo(() => {
-        if (!stats) {
-            return { level1: [], level2: [], level3: [] };
-        }
-        if (!searchTerm) {
-            return {
-                level1: stats.level1.referrals,
-                level2: stats.level2.referrals,
-                level3: stats.level3.referrals,
-            };
-        }
-        const lowerCaseSearch = searchTerm.toLowerCase();
-        const filterFn = (ref: ReferralDetails) => ref.name.toLowerCase().includes(lowerCaseSearch);
-
-        return {
-            level1: stats.level1.referrals.filter(filterFn),
-            level2: stats.level2.referrals.filter(filterFn),
-            level3: stats.level3.referrals.filter(filterFn),
-        };
-    }, [stats, searchTerm]);
-    
     const handleCopyToClipboard = () => {
         if (stats?.referralLink) {
           navigator.clipboard.writeText(stats.referralLink);
@@ -130,7 +126,10 @@ export default function AffiliatesPage() {
         return (value || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
     }
     
-    const renderReferralTable = (title: string, referrals: ReferralDetails[], count: number) => {
+    const renderReferralTable = (title: string, referrals: ReferralDetails[], count: number, level: keyof VisibleCounts) => {
+        const visibleReferrals = referrals.slice(0, visibleCounts[level]);
+        const hasMore = referrals.length > visibleCounts[level];
+
         return (
             <Card>
                 <CardHeader>
@@ -139,9 +138,7 @@ export default function AffiliatesPage() {
                 </CardHeader>
                 <CardContent>
                     {referrals.length === 0 ? (
-                         <p className="text-center text-muted-foreground py-4">
-                            {searchTerm ? 'Nenhum indicado encontrado com este termo.' : 'Nenhum indicado ativo neste nível.'}
-                         </p>
+                         <p className="text-center text-muted-foreground py-4">Nenhum indicado ativo neste nível.</p>
                     ) : (
                         <Table>
                              <TableHeader>
@@ -154,7 +151,7 @@ export default function AffiliatesPage() {
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {referrals.map(r => (
+                                {visibleReferrals.map(r => (
                                     <TableRow key={r.id}>
                                         <TableCell className="font-medium">{r.name}</TableCell>
                                         <TableCell>{formatCurrency(r.totalDeposited)}</TableCell>
@@ -167,6 +164,17 @@ export default function AffiliatesPage() {
                         </Table>
                     )}
                 </CardContent>
+                 {hasMore && (
+                    <CardFooter className="justify-center">
+                        <Button
+                            variant="outline"
+                            onClick={() => setVisibleCounts(prev => ({ ...prev, [level]: referrals.length }))}
+                        >
+                            <ChevronDown className="mr-2 h-4 w-4" />
+                            Mostrar Mais ({referrals.length - visibleCounts[level]} restantes)
+                        </Button>
+                    </CardFooter>
+                )}
             </Card>
         );
     };
@@ -204,14 +212,26 @@ export default function AffiliatesPage() {
                                 )}
                             </CardContent>
                         </Card>
+                         {loading ? (
+                            <div className="space-y-6">
+                                <Skeleton className="h-60 w-full" />
+                                <Skeleton className="h-60 w-full" />
+                            </div>
+                        ) : stats && (
+                            <div className="space-y-6">
+                                {renderReferralTable(`Indicados Diretos (Nível 1 - ${stats.commissionPlan.level1Rate.toFixed(1)}%)`, stats.level1.referrals, stats.level1.count, 'level1')}
+                                {renderReferralTable(`Indicados de Nível 2 (${stats.commissionPlan.level2Rate.toFixed(1)}%)`, stats.level2.referrals, stats.level2.count, 'level2')}
+                                {renderReferralTable(`Indicados de Nível 3 (${stats.commissionPlan.level3Rate.toFixed(1)}%)`, stats.level3.referrals, stats.level3.count, 'level3')}
+                            </div>
+                        )}
                     </div>
                     <div className="space-y-6">
-                        <Card className="bg-primary/20 border-primary/40 flex flex-col h-full">
+                        <Card className="bg-primary/20 border-primary/40">
                             <CardHeader>
                                 <CardTitle className="flex items-center gap-2"><Gift /> Saldo de Comissão</CardTitle>
                                 <CardDescription>Comissões prontas para resgate.</CardDescription>
                             </CardHeader>
-                            <CardContent className="flex-grow">
+                            <CardContent>
                                 {loading ? <Skeleton className="h-8 w-32" /> : <div className="text-4xl font-bold text-primary">{formatCurrency(stats?.commissionBalance || 0)}</div>}
                             </CardContent>
                             <CardFooter>
@@ -220,39 +240,40 @@ export default function AffiliatesPage() {
                                 </Button>
                             </CardFooter>
                         </Card>
+                        <Card>
+                             <CardHeader>
+                                <CardTitle className="flex items-center gap-2"><DollarSign /> Total Depositado (Rede)</CardTitle>
+                                <CardDescription>Soma de todos os depósitos de seus indicados nos 3 níveis.</CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                {loading ? <Skeleton className="h-8 w-32" /> : <div className="text-3xl font-bold">{formatCurrency(totalNetworkDeposits)}</div>}
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader>
+                                <CardTitle className="flex items-center gap-2"><Users /> Sua Rede</CardTitle>
+                            </CardHeader>
+                             <CardContent>
+                                {loading ? (
+                                    <div className="space-y-4">
+                                        <Skeleton className="h-6 w-4/5" />
+                                        <Skeleton className="h-6 w-3/5" />
+                                        <Skeleton className="h-6 w-4/6" />
+                                    </div>
+                                ) : (
+                                    <ul className="space-y-2 text-sm">
+                                        <li className="flex justify-between"><span>Indicados Diretos (Nível 1):</span> <span className="font-bold">{stats?.level1.count}</span></li>
+                                        <li className="flex justify-between"><span>Indicados (Nível 2):</span> <span className="font-bold">{stats?.level2.count}</span></li>
+                                        <li className="flex justify-between"><span>Indicados (Nível 3):</span> <span className="font-bold">{stats?.level3.count}</span></li>
+                                    </ul>
+                                )}
+                            </CardContent>
+                        </Card>
                     </div>
                 </div>
-
-                <Card>
-                    <CardHeader>
-                        <CardTitle>Sua Rede de Indicados</CardTitle>
-                        <CardDescription>Pesquise e visualize os membros da sua rede de afiliados.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="relative mb-4">
-                            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                                placeholder="Buscar indicado por nome..."
-                                className="pl-8"
-                                value={searchTerm}
-                                onChange={(e) => setSearchTerm(e.target.value)}
-                            />
-                        </div>
-                         {loading ? (
-                            <div className="space-y-6">
-                                <Skeleton className="h-60 w-full" />
-                                <Skeleton className="h-60 w-full" />
-                            </div>
-                        ) : stats && (
-                            <div className="space-y-6">
-                                {renderReferralTable(`Indicados Diretos (Nível 1 - ${stats.commissionPlan.level1Rate.toFixed(1)}%)`, filteredReferrals.level1, stats.level1.count)}
-                                {renderReferralTable(`Indicados de Nível 2 (${stats.commissionPlan.level2Rate.toFixed(1)}%)`, filteredReferrals.level2, stats.level2.count)}
-                                {renderReferralTable(`Indicados de Nível 3 (${stats.commissionPlan.level3Rate.toFixed(1)}%)`, filteredReferrals.level3, stats.level3.count)}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
             </div>
         </div>
     );
 }
+
+    

@@ -34,7 +34,6 @@ export interface Scratchcard {
     createdAt?: string | null;
     updatedAt?: string | null;
     categoryIds?: string[];
-    rtpRate?: number;
 }
 
 async function uploadImageAndGetURL(fileBuffer: Buffer, fileName: string, mimeType: string, folder: 'scratchcards' | 'prizes'): Promise<string> {
@@ -59,8 +58,7 @@ export const getScratchcards = cache(async (): Promise<{ success: boolean; data?
     try {
         const adminDb = getAdminDb();
         const scratchcardsCollection = adminDb.collection('scratchcards');
-        // Removed orderBy to prevent index errors. Sorting will be done in-code.
-        const snapshot = await scratchcardsCollection.get();
+        const snapshot = await scratchcardsCollection.orderBy('createdAt', 'desc').get();
         if (snapshot.empty) {
             return { success: true, data: [] };
         }
@@ -73,15 +71,6 @@ export const getScratchcards = cache(async (): Promise<{ success: boolean; data?
                 updatedAt: toISOStringOrNull(docData.updatedAt),
             } as Scratchcard;
         });
-        
-        // Sort the data by creation date manually
-        data.sort((a, b) => {
-            if (a.createdAt && b.createdAt) {
-                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-            }
-            return 0;
-        });
-
         return { success: true, data };
     } catch (error: any) {
         console.error("Error getting scratchcards: ", error);
@@ -163,13 +152,6 @@ export async function saveScratchcard(
         } else if (card.scratchImageUrl) {
             dataToSave.scratchImageUrl = card.scratchImageUrl;
         }
-        
-        if (typeof card.rtpRate === 'number' && !isNaN(card.rtpRate)) {
-             dataToSave.rtpRate = card.rtpRate;
-        } else {
-            dataToSave.rtpRate = FieldValue.delete();
-        }
-
 
         const adminDb = getAdminDb();
         const scratchcardsCollection = adminDb.collection('scratchcards');
